@@ -280,6 +280,7 @@ const en = {
   'row.restoreNoRef': 'That link has no reference text in it.',
   'row.restoreMismatch': 'The reference in that link does not match this bill.',
   'row.restored': 'Reference restored in this browser.',
+  'store.notSaved': 'The reference is not saved in this browser. Copy the link now and keep it somewhere safe.',
 };
 
 const ko = {
@@ -555,6 +556,7 @@ const ko = {
   'row.restoreNoRef': '이 링크에는 청구 내용이 없습니다.',
   'row.restoreMismatch': '이 링크의 청구 내용이 이 청구서와 맞지 않습니다.',
   'row.restored': '이 브라우저에 청구 내용을 되살렸습니다.',
+  'store.notSaved': '청구 내용이 이 브라우저에 저장되지\u00a0않았습니다. 지금\u00a0링크를\u00a0복사해 따로 보관하세요.',
 };
 
 // Machine-drafted. Not yet reviewed by a native Filipino speaker.
@@ -830,6 +832,7 @@ const fil = {
   'row.restoreNoRef': 'Walang reperensya ang link na iyan.',
   'row.restoreMismatch': 'Hindi tugma sa bill na ito ang reperensya sa link na iyan.',
   'row.restored': 'Naibalik ang reperensya sa browser na ito.',
+  'store.notSaved': 'Hindi naka-save sa browser na ito ang reperensya. Kopyahin ngayon ang link at itago ito sa ligtas na lugar.',
 };
 
 export const STRINGS = { en, fil, ko };

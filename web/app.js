@@ -289,16 +289,12 @@ function decodeBill(id, raw) {
   };
 }
 
+// getBill never reverts: an unknown id comes back as an all-zero bill (status None). So every error here is
+// the RPC refusing or failing (rate limit, internal error, empty reply), and it is thrown, never read as
+// "no such bill"; the views show it as a network error and retry.
 async function readBill(id) {
-  const [raw] = await Promise.all([
-    ethCall(net.paidThrough, SEL.getBill + encUint(id)).catch((e) => {
-      if (e instanceof AppError && e.code !== 'NETWORK') return null; // revert = no such bill
-      throw e;
-    }),
-    syncClock(),
-  ]);
-  if (!raw) return null;
-  const bill = decodeBill(id, raw);
+  const [raw] = await Promise.all([ethCall(net.paidThrough, SEL.getBill + encUint(id)), syncClock()]);
+  const bill = decodeBill(id, raw); // a null or '0x' reply throws BAD_REPLY
   return bill.status === STATUS.None ? null : bill;
 }
 
@@ -350,9 +346,11 @@ function shareLink(kind, id, ref) {
 
 /* ------------------------------------------------------------------ local notes (this browser only) */
 
+// set() returns false when the browser refuses the write (private mode, storage blocked or full), so the
+// page never says a reference is kept here when it is not.
 const store = {
   get(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } },
-  set(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* not saved */ } },
+  set(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch { return false; } },
   del(key) { try { localStorage.removeItem(key); } catch { /* ignore */ } },
 };
 const nsKey = (kind, extra) => `pt.${kind}.${net.chainId}.${(net.paidThrough || 'none').toLowerCase()}${extra ? '.' + extra : ''}`;
@@ -362,16 +360,16 @@ const saveRef = (id, ref) => store.set(nsKey('ref', String(id)), { text: ref.tex
 function addPending(ref) {
   const list = store.get(nsKey('pending')) || [];
   list.push(ref);
-  store.set(nsKey('pending'), list.slice(-20));
+  return store.set(nsKey('pending'), list.slice(-20));
 }
+// Moves a pending reference to its bill once the id is known. Returns true only if the reference was saved.
 function settlePending(fp, id) {
   const list = store.get(nsKey('pending')) || [];
   const hit = list.find((p) => p.fp === fp);
-  if (hit) {
-    saveRef(id, hit);
-    store.set(nsKey('pending'), list.filter((p) => p !== hit));
-  }
-  return hit;
+  if (!hit) return false;
+  const saved = saveRef(id, hit);
+  if (saved) store.set(nsKey('pending'), list.filter((p) => p !== hit));
+  return saved;
 }
 
 /* ------------------------------------------------------------------ wallet (EIP-1193) */
@@ -921,6 +919,7 @@ async function billPage(main, r, alive, mode) {
       if (!last) {
         panel.replaceChildren(skeletonPaper());
         head.replaceChildren(eyebrow(), h('h1', { class: 'h-view' }, t('err.title')), h('p', { class: 'lede' }, explain(e)));
+        setTitle(t('err.title')); // the tab title no longer says "loading"
         side.replaceChildren(meta);
       }
       schedule();
@@ -1410,12 +1409,13 @@ async function viewDesk(main, r, alive) {
           const log = res.receipt.logs.find((l) => l.topics[0] === TOPIC.BillIssued && sameAddr(l.address, net.paidThrough));
           if (!log) throw new AppError('BAD_REPLY', 'no BillIssued log');
           const billId = wUint(strip(log.topics[1]));
-          settlePending(fp, billId);
+          // The pending entry may never have been written (storage refused), so save directly as a fallback.
+          const saved = settlePending(fp, billId) || saveRef(billId, { text: v.text, salt });
           Object.assign(draft, { amount: '', ref: '', only: '' });
           if (!alive()) return;
-          drawForm({ id: billId, ref: { text: v.text, salt }, ms: res.ms, hash: res.hash });
+          drawForm({ id: billId, ref: { text: v.text, salt }, ms: res.ms, hash: res.hash, saved });
           formCol.querySelector('#issue-h')?.focus();
-          announce(t('desk.done', { id: String(billId) }));
+          announce(t('desk.done', { id: String(billId) }) + (saved ? '' : ' ' + t('store.notSaved')));
           drawList();
         } catch (err) {
           showError(msg, err, { action: 'issue' });
@@ -1432,7 +1432,7 @@ async function viewDesk(main, r, alive) {
     return [h('h2', { id: 'issue-h', class: 'h-section' }, t('desk.issue')), form];
   }
 
-  function issuedView({ id, ref, ms, hash }) {
+  function issuedView({ id, ref, ms, hash, saved }) {
     const payUrl = shareLink('pay', id, ref);
     const statusUrl = shareLink('bill', id, ref);
     const linkRow = (labelKey, url, idAttr) => h('div', { class: 'field' },
@@ -1445,7 +1445,7 @@ async function viewDesk(main, r, alive) {
       h('p', { class: 'done-line' }, t('desk.doneIn', { secs: (ms / 1000).toFixed(1) }), ' ', h('a', { href: `${net.explorer}/tx/${hash}`, target: '_blank', rel: 'noopener' }, t('pay.viewTx'))),
       linkRow('desk.payLink', payUrl, 'l-pay'),
       linkRow('desk.statusLink', statusUrl, 'l-status'),
-      h('p', { class: 'note' }, t('desk.keepLinks')),
+      saved ? h('p', { class: 'note' }, t('desk.keepLinks')) : h('p', { class: 'note note--bad', id: 'not-saved' }, t('store.notSaved')),
       h('button', { type: 'button', class: 'btn btn--quiet', onclick: () => drawForm() }, t('desk.another')),
     ];
   }
@@ -1562,11 +1562,13 @@ async function viewDesk(main, r, alive) {
     if (phase === 'open') {
       links.push(h('button', { type: 'button', class: 'btn-text', disabled: example, onclick: (e) => copyText(payUrl, e.currentTarget) }, t(ref ? 'row.copyPay' : 'row.copyPayNoRef')));
       if (!ref && !example) {
-        restoreForm = restoreEl(bill, (restored) => {
+        restoreForm = restoreEl(bill, (restored, saved) => {
           const next = billRow(bill, { ref: restored });
           row.replaceWith(next);
           const done = next.querySelector('.msg');
-          done.textContent = t('row.restored');
+          // Not saved: the row still uses the reference for now, but it is gone once the page is left.
+          done.textContent = saved ? t('row.restored') : t('store.notSaved');
+          done.classList.toggle('msg--bad', !saved);
           done.focus();
         });
         links.push(h('button', {
@@ -1612,8 +1614,7 @@ async function viewDesk(main, r, alive) {
         const salt = (q.get('s') || '').toLowerCase();
         if (text == null || !/^[0-9a-f]{32}$/.test(salt)) return fail('row.restoreNoRef');
         if (await fingerprint(salt, text) !== bill.ref.toLowerCase()) return fail('row.restoreMismatch');
-        saveRef(bill.id, { text, salt });
-        return onDone({ text, salt });
+        return onDone({ text, salt }, saveRef(bill.id, { text, salt }));
       },
     },
     h('label', { for: fid, class: 'label' }, t('row.restoreLabel')),
@@ -1678,7 +1679,8 @@ async function myBills(payee, onProgress) {
   await syncClock();
   const bills = [];
   raws.forEach((raw, i) => {
-    if (raw instanceof AppError) return;
+    // getBill never reverts, so an error is a refused read: fail the list (it offers a retry), never drop the bill.
+    if (raw instanceof AppError) throw raw;
     const b = decodeBill(ids[i], raw);
     if (!sameAddr(b.payee, payee)) return;
     if (!loadRef(b.id)) settlePending(b.ref.toLowerCase(), b.id);
@@ -1696,7 +1698,7 @@ async function idsByIteration(payee, cap = 400) {
     const part = ids.slice(i, i + 40);
     const res = await rpcBatch(part.map((id) => ['eth_call', [{ to: net.paidThrough, data: SEL.getBill + encUint(id) }, 'latest']]));
     res.forEach((raw, j) => {
-      if (raw instanceof AppError) return;
+      if (raw instanceof AppError) throw raw; // a refused read, not "someone else's bill"
       if (sameAddr(wAddr(words(raw)[0] || ''), payee)) mine.push(part[j]);
     });
   }

@@ -64,7 +64,8 @@ export class Sim {
     this.logs = [];
     this.txs = new Map();
     this.seq = 0;
-    this.rpcDown = false;
+    this.rpcDown = false;         // fetch itself fails (no connection)
+    this.refuseCalls = false;     // node answers, but refuses eth_call with a JSON-RPC error (rate limit)
     this.events = [];
     this.onChange = () => {};
   }
@@ -294,7 +295,10 @@ export class Sim {
       case 'eth_maxPriorityFeePerGas': return '0x1f2';
       case 'eth_getBalance': return hex(this.balance(params[0]) * 1_000_000_000_000n);
       case 'eth_getCode': return this.codeAt.has(low(params[0])) ? '0xef0100' + '7702'.repeat(10) : '0x';
-      case 'eth_call': return this.view(params[0].to, params[0].data || '0x');
+      case 'eth_call':
+        // A refused read must never look like an empty bill: getBill itself cannot revert for any id.
+        if (this.refuseCalls) throw new RpcFail(-32005, 'request rate limit exceeded');
+        return this.view(params[0].to, params[0].data || '0x');
       case 'eth_estimateGas': {
         const res = this.run(params[0].to, params[0].data || '0x', { from: params[0].from || ZERO, block: this.block(), hash: '0x' }, true);
         return hex(res.gas);

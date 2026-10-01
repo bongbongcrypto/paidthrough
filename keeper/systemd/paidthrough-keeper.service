@@ -1,9 +1,23 @@
-# TEMPLATE ONLY - not installed anywhere. Installing it, funding the keeper wallet and turning on
-# --send are the operator's decisions. Paths assume /home/ubuntu/bots/<name>; adjust to your server.
+# PaidThrough refund keeper, one run per timer tick. Install steps: keeper/README.md "Install on the server".
+# Installing it, funding the keeper wallet and enabling the timer are the operator's decisions.
 #
-# One run per timer tick: rebuild bills from events, refund every bill whose claim window has
-# passed, send one Telegram summary when something happened. Type=oneshot means the timer never
-# starts a second run while one is still going.
+# Layout (one install directory):
+#   /home/ubuntu/bots/paidthrough-keeper/keeper/   copy of the repo's keeper/ (incl. deployments.json after deploy)
+#   /home/ubuntu/bots/paidthrough-keeper/venv/     python3.11 venv with eth-account, eth-abi, pycryptodome
+#   /home/ubuntu/.paidthrough-keeper/              state: log cache + in-flight refunds (create it before start,
+#                                                  or the unit fails with 226/NAMESPACE and no Telegram card)
+#   /home/ubuntu/.paidthrough-keeper.env           KEEPER_PRIVATE_KEY=0x..., chmod 600, created by the operator
+#   /home/ubuntu/.alert.env                        Telegram bot token + chat id
+#
+# One run: rebuild bills from events, refund every bill whose claim window has passed, send one Telegram
+# summary when something happened. Type=oneshot means the timer never starts a second run while one is going.
+#
+# TimeoutStartSec: the keeper starts no new refund after --time-budget (default 180 s). Its worst case after
+# that is the one refund already started (6 RPC calls at the client's worst 115 s each, a 90 s receipt wait plus
+# one more 115 s poll) and the Telegram card (40 s): 180 + 690 + 90 + 1 + 115 + 40 = 1116 s
+# (paidthrough_keeper.worst_case_seconds(); keeper/tests/test_runtime.py fails if this value drops below it).
+# Reads before the first refund are not cut by the budget; if systemd ever stops a run, every sent refund's
+# in-flight record was already saved right after the send.
 [Unit]
 Description=PaidThrough refund keeper (one run)
 After=network-online.target
@@ -12,15 +26,17 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=ubuntu
-WorkingDirectory=/home/ubuntu/bots/paidthrough
-# Key file and alert file live outside the repo, chmod 600. Never put the key in this unit.
+WorkingDirectory=/home/ubuntu/bots/paidthrough-keeper
+# Key file and alert file live outside the install directory, chmod 600. Never put the key in this unit.
 Environment=PAIDTHROUGH_KEEPER_ENV=/home/ubuntu/.paidthrough-keeper.env
 Environment=PAIDTHROUGH_ALERT_ENV=/home/ubuntu/.alert.env
 Environment=PAIDTHROUGH_KEEPER_STATE=/home/ubuntu/.paidthrough-keeper
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3.11 keeper/paidthrough_keeper.py run --send --notify --network mainnet
-TimeoutStartSec=240
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/ubuntu/bots/paidthrough-keeper/venv/bin/python keeper/paidthrough_keeper.py run --send --notify --network mainnet
+TimeoutStartSec=1200
 MemoryMax=200M
+UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict

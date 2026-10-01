@@ -37,20 +37,102 @@ every command prints "no deployment configured" and exits 0. After deploy, fill 
 `{"address": "0x...", "fromBlock": <deploy block>}` for that network, or pass
 `--contract 0x... --from-block N`.
 
-Other options: `--rpc URL`, `--state-dir DIR` (scan cache, default `~/.paidthrough-keeper`),
-`--no-cache` (re-read all logs), and for `run`: `--from-address` (dry-run simulation sender),
-`--max-sends 20`, `--min-amount 0.05`, `--max-fee-gwei 500`, `--receipt-timeout 90`.
+Other options: `--rpc URL`, `--state-dir DIR` (state file, default `~/.paidthrough-keeper`, or
+`$PAIDTHROUGH_KEEPER_STATE`), `--no-cache` (re-read all logs), and for `run`: `--from-address` (dry-run
+simulation sender), `--max-sends 20`, `--min-amount 0.05`, `--max-fee-gwei 500`, `--receipt-timeout 90`,
+`--time-budget 180`.
 
-Exit codes: 0 ok (skipped bills included), 1 error or unknown chain state, 2 refused (config, key, chain id).
+Exit codes: 0 ok (skipped bills included), 1 error, unknown chain state or state file not saved,
+2 refused (config, key, chain id, or `run --send` with a state file it cannot write).
 
-## How the server would run it
+## Run time and the state file
 
-Templates only, nothing is installed: `keeper/systemd/paidthrough-keeper.service` and `.timer`
-run `run --send --notify --network mainnet` every 5 minutes with `MemoryMax=200M`.
+- Time budget: `run` starts no new refund (simulation or send) once `--time-budget` seconds (default 180)
+  have passed since it started. The refund already under way finishes, the rest are listed as skipped
+  ("time_budget") and the next run picks them up; the run then saves its state, sends its card and exits 0.
+  Chain reads before the first refund are not cut short: the log cache is saved only after a complete
+  read, so cutting a long first scan would repeat it on every run.
+- The state file holds the log cache and every sent-but-unconfirmed refund (the double-send guard). It is
+  written right after each send, not only at the end, so a run stopped from outside cannot lose a record.
+- `run --send` first checks that the state file can be written and refuses (exit 2, nothing read or sent)
+  when it cannot. A save that fails later stops further sends, prints the error and exits 1. With
+  `--notify`, both send a "키퍼 기록 저장 실패" card, on every run until the directory is fixed (the
+  card de-dup lives in that same file). `scan`, `due` and `bill` only warn: their output is still correct.
 
-- Key: a file outside the repo, `~/.paidthrough-keeper.env` (or `$PAIDTHROUGH_KEEPER_ENV`), one line
-  `KEEPER_PRIVATE_KEY=0x...`, `chmod 600`. Use a fresh wallet holding only gas money. The key is never
-  printed or logged; `--send` is refused when the file is missing.
+## Install on the server
+
+The unit and timer in `keeper/systemd/` run `run --send --notify --network mainnet` every 5 minutes
+with `MemoryMax=200M`. Installing them, funding the keeper wallet and enabling the timer are the
+operator's decisions. Everything lives in one directory:
+
+| Path | What |
+|---|---|
+| `/home/ubuntu/bots/paidthrough-keeper/keeper/` | copy of this repo's `keeper/`, including `deployments.json` after deploy |
+| `/home/ubuntu/bots/paidthrough-keeper/venv/` | Python 3.11 venv |
+| `/home/ubuntu/.paidthrough-keeper/` | state file (must exist before the unit starts) |
+| `/home/ubuntu/.paidthrough-keeper.env` | `KEEPER_PRIVATE_KEY=0x...`, `chmod 600` |
+| `/home/ubuntu/.alert.env` | Telegram token and chat id |
+
+1. From the repo folder on your computer, copy `keeper/` over (replace `SERVER` with your ssh host).
+   Run this again after the mainnet deploy, once the deploy script has filled `keeper/deployments.json`
+   (or copy just that file). A later copy of `keeper/` replaces the server's `deployments.json` with the
+   repo's, so commit the deploy result first.
+
+   ```
+   ssh SERVER "mkdir -p /home/ubuntu/bots/paidthrough-keeper"
+   scp -r keeper SERVER:/home/ubuntu/bots/paidthrough-keeper/
+   scp keeper/deployments.json SERVER:/home/ubuntu/bots/paidthrough-keeper/keeper/deployments.json
+   ```
+
+2. On the server (bash): venv, pinned libraries, state directory. The `pip install` runs under a memory cap.
+   On Ubuntu `python3.11 -m venv` needs the `python3.11-venv` package.
+
+   ```
+   cd /home/ubuntu/bots/paidthrough-keeper
+   python3.11 -m venv venv
+   systemd-run --user --scope -p MemoryMax=800M venv/bin/pip install eth-account==0.13.7 eth-abi==6.0.0 pycryptodome==3.23.0
+   install -d -m 700 /home/ubuntu/.paidthrough-keeper
+   ```
+
+3. Key file, created by the operator. Use a fresh wallet that holds only gas money. Paste the line
+   `KEEPER_PRIVATE_KEY=0x...` in the editor; never `echo` the key (it would stay in the shell history).
+   The key is never printed or logged, and `--send` is refused when the file is missing.
+
+   ```
+   touch /home/ubuntu/.paidthrough-keeper.env
+   chmod 600 /home/ubuntu/.paidthrough-keeper.env
+   nano /home/ubuntu/.paidthrough-keeper.env
+   ```
+
+4. Dry-run from the server first (no key used, nothing sent). If it ends in `RpcUnavailable`, the public
+   RPC is refusing the server: add `--rpc URL` with another Arc mainnet RPC to `ExecStart`.
+
+   ```
+   cd /home/ubuntu/bots/paidthrough-keeper
+   venv/bin/python keeper/paidthrough_keeper.py due --network mainnet
+   venv/bin/python keeper/paidthrough_keeper.py run --network mainnet
+   ```
+
+5. Install the unit, run it once by hand, read its log, then enable the timer.
+
+   ```
+   cd /home/ubuntu/bots/paidthrough-keeper
+   sudo cp keeper/systemd/paidthrough-keeper.service keeper/systemd/paidthrough-keeper.timer /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl start paidthrough-keeper.service
+   sudo journalctl -u paidthrough-keeper.service -n 50 --no-pager
+   sudo systemctl enable --now paidthrough-keeper.timer
+   systemctl list-timers paidthrough-keeper.timer
+   ```
+
+Notes:
+
+- If `/home/ubuntu/.paidthrough-keeper` is missing, the unit fails before Python starts (status
+  `226/NAMESPACE` in `systemctl status paidthrough-keeper.service`) and no Telegram card is sent.
+  Manual runs as `ubuntu` use the same state directory by default, so they share the double-send guard.
+- `TimeoutStartSec=1200` is above the worst case after the time budget: the one refund already started
+  (6 RPC calls at the client's worst 115 s each, a 90 s receipt wait and one more poll) plus the Telegram
+  card, 1116 s in total (`worst_case_seconds()`; a test fails if the unit drops below it).
 - Telegram: `--notify` sends one Korean summary card per run when something happened (refunds sent,
   failures, new skips). Credentials from `~/.alert.env` (`$PAIDTHROUGH_ALERT_ENV`):
   `BOT_TOKEN_PAIDTHROUGH` or `BOT_TOKEN`, plus `USER_DIRECT_CHAT_ID`. Repeated skips are not re-sent
@@ -87,4 +169,6 @@ python -m unittest discover -s keeper/tests -v
 ```
 
 A fake node serves logs and `getBill` results encoded with `eth_abi`, with Arc's real error messages.
-Signing tests use throwaway keys generated inside the test.
+Signing tests use throwaway keys generated inside the test. `test_runtime.py` runs a slow fake node against
+the time budget, points the state directory under a regular file, and checks the systemd unit's paths and
+`TimeoutStartSec`.

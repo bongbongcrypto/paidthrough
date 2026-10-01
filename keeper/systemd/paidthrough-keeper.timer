@@ -1,4 +1,5 @@
-# TEMPLATE ONLY - not installed anywhere. Enabling it is the operator's decision.
+# Starts paidthrough-keeper.service every 5 minutes. Install steps: keeper/README.md "Install on the server".
+# Enabling it is the operator's decision. A run still going when the next tick comes is not started twice.
 [Unit]
 Description=Run the PaidThrough refund keeper every 5 minutes
 

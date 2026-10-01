@@ -1,10 +1,10 @@
 # SOURCES
 
-Fact check for README claims. All pages were accessed on 2026-10-01. Figures are copied as published, with no rounding. "Via search index" means the site blocked direct fetching (HTTP 403/405), so the figure comes from the search engine's copy of that page and was not read first-hand.
+Fact check for README claims. Pages were accessed on 2026-10-01 unless an entry gives another date. Figures are copied as published, with no rounding. "Via search index" means the site blocked direct fetching (HTTP 403/405), so the figure comes from the search engine's copy of that page and was not read first-hand.
 
 ---
 
-## 1. Migrant workers in Korea sent USD 3.557 billion abroad through banks in 2025 (BOK data, Maeil Business, 2026-09-04)
+## 1. Migrant workers in Korea sent USD 3.557 billion abroad through banks in 2025 (reported by Maeil Business, 2026-09-04, citing Bank of Korea data given to a lawmaker)
 
 Status: PARTLY (figure and outlet confirmed; verbatim sentence and BOK statistic name not retrieved)
 
@@ -163,7 +163,7 @@ Quote:
 - "출금 수수료: 0.01 USDC"
 - "현재 Arc 네트워크를 통한 유에스디코인(USDC) 입출금 서비스를 이용하실 수 있습니다"
 
-Note: the values came from two consistent extractions of the API JSON, not a raw read. Exchange fees change over time, so recheck before publishing.
+Note: the values came from two consistent extractions of the API JSON, not a raw read. Exchange fees change over time, so the README states the fee "as of notice 6579, 2026-09-16"; recheck before publishing.
 
 ---
 
@@ -204,3 +204,31 @@ Quote:
 - MOFA: "외국환거래법 제27조의 2에 의해서 3년 이하의 징역 또는 3억원 이하의 벌금에 처해 집니다."
 
 Note: The penalty is cited from MOFA only, because article numbering for penalties in the elaw translation came back inconsistent.
+
+---
+
+## 10. Coins.ph and PDAX (Philippines) are among the exchanges live on Arc
+
+Status: CONFIRMED (listed by Arc; withdrawals at each exchange not tested by us). Accessed 2026-10-02.
+
+Figure as published: the launch post lists exchanges live on Arc by name; Coins.ph, PDAX and Upbit are among them.
+
+Source: "Arc Mainnet Is Live: The Economic OS for the Internet", Team Arc, September 16, 2026. https://www.arc.io/blog/arc-economic-os-internet
+
+Quote:
+- "The world's leading digital asset exchanges are live on Arc"
+
+Note: the README claims only the listing, not withdrawal support, fees or limits at either Philippine exchange.
+
+---
+
+## 11. Arc finality is deterministic and takes under one second
+
+Status: CONFIRMED. Accessed 2026-10-02.
+
+Figure as published: deterministic finality; settlement in under one second (Malachite BFT consensus).
+
+Source: "Deterministic finality and settlement", Arc Docs (no date shown on the page). https://docs.arc.io/arc/concepts/deterministic-finality
+
+Quote:
+- "Arc's deterministic finality delivers irreversible transaction settlement in under one second."

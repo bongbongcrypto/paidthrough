@@ -59,10 +59,33 @@ There is no other way for money to leave the contract. Nobody, including whoever
 | Addresses with code (EIP-7702 delegations, smart accounts) sign through ERC-1271 | page checks `eth_getCode(payer)` and falls back to approve + pay |
 | Everything public | reference fingerprints; page warns at issue time |
 
+## Review findings and fixes
+
+Two internal adversarial reviews ran on 2026-10-01, one on security and one on spec and test quality. Neither found a way to lose or redirect funds in the contract. The security review found three issues outside the contract and the spec and test review found eight test gaps (F1-F8). All eleven are fixed.
+
+Security review:
+
+- **Keeper log-spam DoS (medium).** More than 2,000 cheap `BillCancelled` events in one block made the keeper's log query fail on that block every run, which would stop automatic refunds. The keeper no longer reads `BillCancelled` and falls back to `getBill` when a block still overflows (`keeper/tests/test_spam.py`).
+- **Dust griefing (low).** Thousands of 1-unit bills could queue ahead of real refunds and burn keeper gas. Refunds now go largest first, and bills below 0.05 USDC are left for the payer to refund.
+- **Look-alike biller display (low).** The page showed the biller as a short address (32 bits) next to a green reference check, so a vanity address with the same short form could pass for the school. The page now shows the full checksummed address in 4-character groups, and the check says it does not prove who the biller is.
+
+Spec and test review:
+
+- **F1 (medium).** The "native value is rejected" test passed for the wrong reason (the caller had no USDC). Every function is now called with value from a funded caller, and again without.
+- **F2 (medium).** No test paid a bill already Claimed, Declined or Refunded. Both pay paths are now shown to revert there with `WrongStatus`.
+- **F3 (medium).** The Arc fork test returned silently when funding failed. It fails instead, and every stub logs `STUBBED:`.
+- **F4 (info).** A blocklist test assumed a blocklisted payee can still send a transaction. The real-node rehearsal showed Arc refuses it, and the test now expects that.
+- **F5 (low).** The invariant run tolerated reverts and hid idle actions. `fail_on_revert` is on, action counts cover all runs, and the handler makes bad calls that must fail with exact errors.
+- **F6 (low).** A pay-by fuzz test reached its accept branch in about 0.3% of runs. The input is now bounded so both branches get real coverage.
+- **F7 (low).** The re-entrancy test token hooked only `transfer`. It now also hooks `transferFrom` and `receiveWithAuthorization` and re-enters pay and cancel.
+- **F8 (info).** No test covered a token that over-credits, or `cancelAuthorization`. Both are added.
+
+The security review also noted two untested paths that were already correct: a signature submitted straight to USDC, and a payer set to the contract or to USDC. The rehearsal now runs both on the real node, and `PaidThroughAuth.t.sol` covers them with the mock token.
+
 ## Known limits
 
-- **Unaudited.** Tests and reviews are listed in the README; no external audit.
-- **Blocklisted addresses** (checked on the real Arc node, `status/rehearsal-2026-10-01.md` steps 23-37, including a really blocklisted mainnet address). Arc's USDC rejects a transfer with "Blocked address" when the sender, the recipient, or the address that sends the transaction is blocklisted. So a blocked payee can neither claim nor decline, and after `claimBy` any unblocked address refunds the payer. A blocked payer cannot pay; if a payer is blocked after paying, the refund reverts and waits until the block is lifted, and if it is permanent the money stays frozen in the contract, as the token would freeze it anyway. The keeper's own address must not be blocked. There is no pull fallback.
+- **Unaudited.** Tests are listed in the README and review findings above; no external audit.
+- **Blocklisted addresses** (checked on the real Arc node, `status/rehearsal-2026-10-02.md` steps 23-37, including a really blocklisted mainnet address). Arc's USDC rejects a transfer with "Blocked address" when the sender, the recipient, or the address that sends the transaction is blocklisted. So a blocked payee can neither claim nor decline, and after `claimBy` any unblocked address refunds the payer. A blocked payer cannot pay; if a payer is blocked after paying, the refund reverts and waits until the block is lifted, and if it is permanent the money stays frozen in the contract, as the token would freeze it anyway. The keeper's own address must not be blocked. There is no pull fallback.
 - **Smart-wallet payers.** Arc's USDC checks signatures from an address that has code (an EIP-7702 delegated wallet or a smart account) through ERC-1271. Such a payer can sign only if its wallet implements ERC-1271; otherwise the page uses approve + pay. Found by the fork test: small public test keys on Arc mainnet already carry sweeper delegations.
 - **A payer can burn the signature path for a bill.** Arc's USDC has `cancelAuthorization`; a payer who cancels `authNonce(billId)` can no longer pay that bill by signature. Approve + pay still works. Only the payer can do this to their own nonce.
 - **Open bills can be paid by anyone.** With no `allowedPayer`, a stranger can pay first; the money still goes to the bill, and the intended payer's transaction fails with `WrongStatus`. The biller desk asks for the payer's address when it is known.

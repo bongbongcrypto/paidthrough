@@ -15,13 +15,17 @@ Global options: --network mainnet|testnet, --contract 0x.., --from-block N, --rp
 --no-cache. Deployment defaults come from keeper/deployments.json:
     {"mainnet": {"address": "0x..", "fromBlock": 123}, "testnet": null}
 Key for --send: file at $PAIDTHROUGH_KEEPER_ENV (default ~/.paidthrough-keeper.env), line KEEPER_PRIVATE_KEY=0x...
+`run --time-budget S` (default 180): no new refund starts after S seconds; the run then saves, reports, exits 0.
 
-Exit codes: 0 ok (skips included), 1 error or unknown state, 2 usage/config refused.
+Exit codes: 0 ok (skips included), 1 error, unknown state or state file not saved, 2 usage/config refused
+(including `run --send` when the state file cannot be written).
 """
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
+import math
 import os
 import re
 import sys
@@ -51,6 +55,38 @@ MAX_MISSING_GETBILL = 5000         # new ids per run absent from events, filled 
 SKIP_RENOTIFY_S = 24 * 3600
 ERROR_RENOTIFY_S = 6 * 3600
 DEPLOYMENTS = HERE / "deployments.json"
+
+# Run time budget. The systemd timer starts a run every 5 minutes; a run with many due bills and a slow node
+# could otherwise outlast the unit's TimeoutStartSec and be killed before it saves state or sends its card.
+DEFAULT_TIME_BUDGET = 180.0      # s from process start; no new refund (simulation or send) starts after it
+DEFAULT_RECEIPT_TIMEOUT = 90.0
+DEFAULT_POLL = 1.0
+SEND_RPC_CALLS = 6               # per refund: getBill, eth_call, eth_estimateGas, getBalance, getTransactionCount, send
+TELEGRAM_WORST_S = 2 * 2 * 10    # notify.send_card: HTML then plain text, 10 s socket timeout on connect and read
+
+# Skip reasons added by this module. Their card wording belongs in notify.SKIP_KO; setdefault keeps it if present.
+notifier.SKIP_KO.setdefault("time_budget", "이번 실행 시간 한도에 걸려 다음 실행으로 넘김")
+notifier.SKIP_KO.setdefault("state_unsaved", "키퍼 기록을 저장하지 못해 보내기를 멈춤")
+
+
+def rpc_call_worst() -> float:
+    """Longest one Rpc.call can take with the client defaults main() uses: every attempt times out."""
+    p = inspect.signature(Rpc.__init__).parameters
+    timeout, retries, backoff = p["timeout"].default, p["retries"].default, p["backoff"].default
+    return (retries + 1) * timeout + sum(min(backoff * 2 ** k, 30.0) for k in range(retries))
+
+
+def worst_case_seconds(budget: float = DEFAULT_TIME_BUDGET, receipt_timeout: float = DEFAULT_RECEIPT_TIMEOUT,
+                       poll: float = DEFAULT_POLL) -> float:
+    """Longest a `run` can last once its chain reads are done: the budget, plus the one refund that started just
+    before the budget ran out (SEND_RPC_CALLS calls, the receipt wait and its last poll), plus the Telegram card.
+    The systemd unit's TimeoutStartSec must stay above this (a test checks it).
+
+    Reads before the first refund are deliberately not cut by the budget: the log cache is committed only after
+    a complete read, so stopping a long first scan would repeat it on every run. If systemd ever does stop a run,
+    the in-flight record of every refund sent was already written right after the send."""
+    call = rpc_call_worst()
+    return budget + SEND_RPC_CALLS * call + receipt_timeout + poll + call + TELEGRAM_WORST_S
 
 
 class ConfigError(Exception):
@@ -192,6 +228,16 @@ def save_state(path: Path, data: dict) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def try_save(path: Path, data: dict) -> str:
+    """save_state, with a failure (read-only directory, path under a regular file, full disk) returned as a
+    one-line reason instead of an exception. '' means saved."""
+    try:
+        save_state(path, data)
+    except OSError as e:
+        return "%s: %s" % (type(e).__name__, e)
+    return ""
 
 
 # ---------------------------------------------------------------- chain reads
@@ -574,8 +620,12 @@ def resolve_inflight(ctx: Ctx, cache: dict) -> set:
     return blocked
 
 
-def cmd_run(ctx: Ctx, cache: dict, args, key: KeeperKey = None, sleep=time.sleep, clock=time.monotonic) -> tuple:
-    """Returns (exit code, summary dict for the notifier)."""
+def cmd_run(ctx: Ctx, cache: dict, args, key: KeeperKey = None, sleep=time.sleep, clock=time.monotonic,
+            deadline: float = None, persist=None) -> tuple:
+    """Returns (exit code, summary dict for the notifier).
+    deadline: clock() value after which no new refund (simulation or send) starts; the rest are skipped as
+    'time_budget' and picked up by the next run. persist(): writes the state file right after each send and
+    returns '' or a reason, so a run stopped from outside (systemd timeout, OOM) cannot lose an in-flight record."""
     summary = {"sent": [], "skipped": [], "failed": [], "below_min": 0}
     sender = key.address if key else (args.from_address or ZERO)
     blocked = resolve_inflight(ctx, cache) if args.send else set()
@@ -599,6 +649,13 @@ def cmd_run(ctx: Ctx, cache: dict, args, key: KeeperKey = None, sleep=time.sleep
                 rec.id, usdc6(rec.amount), usdc6(args.min_amount)))
             continue
         if stop_reason:
+            summary["skipped"].append({"id": rec.id, "reason": stop_reason})
+            ctx.p("  bill %d  SKIP %s" % (rec.id, stop_reason))
+            continue
+        if deadline is not None and clock() >= deadline:
+            stop_reason = "time_budget"
+            ctx.p("  run time budget (%gs) used up: no new refund starts this run; the next run continues" % (
+                getattr(args, "time_budget", 0) or 0))
             summary["skipped"].append({"id": rec.id, "reason": stop_reason})
             ctx.p("  bill %d  SKIP %s" % (rec.id, stop_reason))
             continue
@@ -640,6 +697,12 @@ def cmd_run(ctx: Ctx, cache: dict, args, key: KeeperKey = None, sleep=time.sleep
         sends += 1
         cache.setdefault("inflight", {})[str(rec.id)] = {"tx": tx_hash, "block": ctx.head, "nonce": nonce}
         ctx.p("  bill %d  sent %s (nonce %d)" % (rec.id, tx_hash, nonce))
+        problem = persist() if persist else ""
+        if problem:
+            ctx.p("  bill %d  in-flight record NOT saved (%s); stopping sends this run" % (rec.id, problem))
+            summary["state_error"] = problem
+            stop_reason = "state_unsaved"
+            exit_code = 1
         receipt = wait_receipt(ctx, tx_hash, args.receipt_timeout, args.poll, sleep=sleep, clock=clock)
         if receipt is None:
             ctx.p("  bill %d  no receipt after %ss; status unknown, stopping sends this run" % (rec.id, args.receipt_timeout))
@@ -691,6 +754,31 @@ def maybe_notify(network: str, summary: dict, cache: dict, error: str = "", send
     print("telegram: %s" % ("sent" if ok else "not sent (%s)" % why), file=out)
 
 
+def state_card(network: str, summary: dict = None, refused: bool = False) -> str:
+    """Card for a state file that could not be written. refused: `run --send` stopped before reading the chain."""
+    net = notifier.NET_KO.get(network, network)
+    summary = summary or {}
+    sent, failed = summary.get("sent") or [], summary.get("failed") or []
+    lines = ["서버에 키퍼 기록 파일을 쓰지 못했습니다."]
+    if refused:
+        lines.append("그래서 이번 실행은 환불 거래를 하나도 보내지 않았습니다.")
+    elif sent:
+        lines.append("이번 실행에서 환불 %d건, 합계 %s USDC를 보냈습니다." % (len(sent), usdc6(sum(s["amount"] for s in sent))))
+    else:
+        lines.append("이번 실행에서 완료된 환불 거래는 없습니다.")
+    if failed and not refused:
+        lines.append("청구서 %s 거래 결과는 확인되지 않았습니다." % notifier._ids(failed))
+    lines.append("고칠 때까지 실행마다 이 알림이 옵니다.")
+    return notifier.card("%s 키퍼 기록 저장 실패" % net, lines, todo="서버의 키퍼 기록 폴더 권한과 남은 공간 확인",
+                         tag=notifier.TAG)
+
+
+def send_state_card(network: str, summary: dict = None, refused: bool = False, sender=None, out=sys.stdout) -> None:
+    """Not de-duplicated: the de-dup stamps live in the state file that could not be written."""
+    ok, why = (sender or notifier.send_card)(state_card(network, summary, refused))
+    print("telegram: %s" % ("sent" if ok else "not sent (%s)" % why), file=out)
+
+
 # ---------------------------------------------------------------- CLI
 DEFAULT_MIN_AMOUNT = 50_000   # 0.05 USDC in 6-decimal units, ~25x the expected refund gas (~0.002 USDC)
 
@@ -706,6 +794,16 @@ def usdc_units(text: str) -> int:
     if not d.is_finite() or d < 0 or units != units.to_integral_value():
         raise argparse.ArgumentTypeError("USDC amount must be >= 0 with at most 6 decimals: %r" % text)
     return int(units)
+
+
+def positive_seconds(text: str) -> float:
+    try:
+        v = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("not a number of seconds: %r" % text) from None
+    if not math.isfinite(v) or v <= 0:
+        raise argparse.ArgumentTypeError("seconds must be a finite number above 0: %r" % text)
+    return v
 
 
 def _global_options(p, defaults: bool):
@@ -739,13 +837,17 @@ def parse(argv):
     r.add_argument("--min-amount", type=usdc_units, default=DEFAULT_MIN_AMOUNT, metavar="USDC",
                    help="skip bills below this amount (default 0.05): the payer can call refund themselves")
     r.add_argument("--max-fee-gwei", type=float, default=500.0, help="skip if maxFeePerGas would exceed this")
-    r.add_argument("--receipt-timeout", type=float, default=90.0)
-    r.add_argument("--poll", type=float, default=1.0)
+    r.add_argument("--receipt-timeout", type=float, default=DEFAULT_RECEIPT_TIMEOUT)
+    r.add_argument("--poll", type=float, default=DEFAULT_POLL)
+    r.add_argument("--time-budget", type=positive_seconds, default=DEFAULT_TIME_BUDGET, metavar="SECONDS",
+                   help="no new refund starts after this many seconds from start (default %g); "
+                        "the run then saves state, sends its card and exits" % DEFAULT_TIME_BUDGET)
     return ap.parse_args(argv)
 
 
 def main(argv=None, rpc_factory=None, out=None, err=None, key_loader=None, notify_sender=None,
          sleep=time.sleep, clock=time.monotonic, deployments: Path = DEPLOYMENTS) -> int:
+    started = clock()   # the run's time budget counts from here
     out = out or sys.stdout
     err = err or sys.stderr
     args = parse(argv if argv is not None else sys.argv[1:])
@@ -775,25 +877,53 @@ def main(argv=None, rpc_factory=None, out=None, err=None, key_loader=None, notif
     ctx = Ctx(rpc, args.network, contract, from_block, net["chainId"], out=out, err=err)
     spath = state_file(state_dir(args.state_dir), args.network, contract, from_block)
     cache = load_state(spath, net["chainId"], contract, from_block)
+    notify = args.cmd == "run" and args.notify
+    if args.cmd == "run" and args.send:
+        # Before any chain call and before --no-cache touches the cache: a refund whose in-flight record cannot be
+        # written could be sent a second time by the next run, so --send needs a writable state file first.
+        problem = try_save(spath, cache)
+        if problem:
+            print("error: --send refused: cannot write the keeper state file %s (%s). Nothing was sent. Fix the "
+                  "state directory (--state-dir / PAIDTHROUGH_KEEPER_STATE / the unit's ReadWritePaths) first."
+                  % (spath, problem), file=err)
+            if notify:
+                send_state_card(args.network, refused=True, sender=notify_sender, out=out)
+            return 2
     if args.no_cache:   # forget cached logs only; in-flight txs and alert de-dup are kept (double-send guard)
         cache["logs"], cache["scannedTo"] = [], None
-    notify = args.cmd == "run" and args.notify
     try:
         connect(ctx)
-        if args.cmd == "scan":
-            code = cmd_scan(ctx, cache)
-        elif args.cmd == "due":
-            code = cmd_due(ctx, cache)
-        elif args.cmd == "bill":
-            code = cmd_bill(ctx, cache, args.id)
-        else:
-            try:
-                code, summary = cmd_run(ctx, cache, args, key=key, sleep=sleep, clock=clock)
-            finally:
-                save_state(spath, cache)   # in-flight txs must survive any later failure
+        if args.cmd != "run":
+            if args.cmd == "scan":
+                code = cmd_scan(ctx, cache)
+            elif args.cmd == "due":
+                code = cmd_due(ctx, cache)
+            else:
+                code = cmd_bill(ctx, cache, args.id)
+            problem = try_save(spath, cache)
+            if problem:   # only the scan cache is lost; what was printed above is still right
+                print("warning: scan cache not saved to %s (%s)" % (spath, problem), file=err)
+            return code
+        problem = ""
+        try:
+            code, summary = cmd_run(ctx, cache, args, key=key, sleep=sleep, clock=clock,
+                                    deadline=started + args.time_budget, persist=lambda: try_save(spath, cache))
+        finally:
+            problem = try_save(spath, cache)   # in-flight txs must survive any later failure
+        if problem:
+            print("error: could not save the keeper state file %s (%s). Refunds confirmed this run: %d; records of "
+                  "unconfirmed ones may be lost. Fix the state directory before the next run."
+                  % (spath, problem, len(summary["sent"])), file=err)
             if notify:
-                maybe_notify(args.network, summary, cache, sender=notify_sender, out=out)
-        save_state(spath, cache)
+                send_state_card(args.network, summary, sender=notify_sender, out=out)
+            return 1
+        if notify:
+            maybe_notify(args.network, summary, cache, sender=notify_sender, out=out)
+            problem = try_save(spath, cache)   # alert de-dup stamps
+            if problem:
+                print("error: could not save the keeper state file %s after the Telegram card (%s)"
+                      % (spath, problem), file=err)
+                return 1
         return code
     except ConfigError as e:
         print("error: " + str(e), file=err)
@@ -803,10 +933,9 @@ def main(argv=None, rpc_factory=None, out=None, err=None, key_loader=None, notif
         if notify:
             maybe_notify(args.network, {"sent": [], "skipped": [], "failed": []}, cache,
                          error=type(e).__name__, sender=notify_sender, out=out)
-        try:
-            save_state(spath, cache)   # raw logs are only committed after a full read; keeps in-flight + notified
-        except OSError:
-            pass
+        problem = try_save(spath, cache)   # raw logs are only committed after a full read; keeps in-flight + notified
+        if problem:
+            print("error: could not save the keeper state file %s (%s)" % (spath, problem), file=err)
         return 1
 
 

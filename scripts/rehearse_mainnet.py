@@ -17,7 +17,9 @@ Run locally (Python 3.11+ with eth-account, eth-abi, pycryptodome), using the `c
     gh run download <run-id> -n contracts-out -D contracts/out
     python scripts/rehearse_mainnet.py --out contracts/out --markdown rehearsal.md --json rehearsal.json
 
-Exit code 0 when every step matched its expectation, 1 otherwise.
+Every step asserts one exact outcome ("ok" or the exact revert reason); there are no observe-only steps. The last
+line is the verdict, e.g. "VERDICT: PASS - 37/37 asserted steps matched, 0 mismatched, 0 skipped; required checks
+6/6 ok". Exit code 0 only when no asserted step mismatched and every required check passed, 1 otherwise.
 """
 
 from __future__ import annotations
@@ -62,6 +64,7 @@ REAL_BLOCKLIST_CANDIDATES = [
 ]
 
 STATUS = ["None", "Open", "Paid", "Claimed", "Refunded", "Declined", "Cancelled"]
+BLOCKED = "Blocked address"  # revert string of Arc's blocklist check
 BILL_ABI = "(address,uint96,address,uint64,uint32,address,uint64,uint8,bytes32)"
 BILL_FIELDS = ["payee", "amount", "payer", "payBy", "claimWindow", "allowedPayer", "claimBy", "status", "ref"]
 
@@ -102,6 +105,39 @@ def cost_str(gas: int | None) -> str:
         return "-"
     wei = gas * BASE_FEE_WEI
     return f"{wei // 10**18}.{(wei % 10**18) // 10**10:08d}"
+
+
+# ---------------------------------------------------------------------------------------------- matching
+# Every step asserts one exact outcome: "ok", or the revert reason it must give (a custom error name such as
+# "ClaimWindowClosed", or a revert string such as "Blocked address"; the token's "FiatTokenV2: " prefix is
+# tolerated). There is no "any revert" and no observe-only step, so "N steps matched" means N exact outcomes.
+
+
+def check_expect(expect) -> None:
+    if not isinstance(expect, str) or not expect.strip() or expect.strip().lower() in ("revert", "(observe)"):
+        raise ValueError(f"step expectation must be 'ok' or an exact revert reason, got {expect!r}")
+
+
+def match_outcome(expect: str, ok: bool, reason: str) -> str:
+    """'yes' when the call ended exactly as expected, 'NO' otherwise."""
+    check_expect(expect)
+    if expect == "ok":
+        return "yes" if ok else "NO"
+    return "yes" if (not ok and expect.lower() in (reason or "").lower()) else "NO"
+
+
+def verdict(steps: list[dict], checks: list[dict]) -> tuple[bool, str]:
+    """Counts asserted steps (match yes/NO); a skipped step is neither matched nor asserted."""
+    matched = sum(1 for s in steps if s["match"] == "yes")
+    mismatched = sum(1 for s in steps if s["match"] == "NO")
+    skipped = sum(1 for s in steps if s["match"] not in ("yes", "NO"))
+    asserted = matched + mismatched
+    required = [c for c in checks if c["required"]]
+    req_ok = sum(1 for c in required if c["ok"])
+    passed = asserted > 0 and mismatched == 0 and req_ok == len(required)
+    line = (f"VERDICT: {'PASS' if passed else 'FAIL'} - {matched}/{asserted} asserted steps matched, "
+            f"{mismatched} mismatched, {skipped} skipped; required checks {req_ok}/{len(required)} ok")
+    return passed, line
 
 
 class Rpc:
@@ -327,9 +363,10 @@ class Rehearsal:
 
     # ---- step runner
 
-    def step(self, name: str, caller, data: str, overrides: dict, expect: str | None, *, to: str | None = None,
+    def step(self, name: str, caller, data: str, overrides: dict, expect: str, *, to: str | None = None,
              block_ov: dict | None = None, est_overrides: dict | None = None, probe: dict | None = None,
              note: str = ""):
+        check_expect(expect)
         tx = {"from": caller.address, "to": to or self.pt, "data": data}
         ok, ret, reason = self.eth_call(tx, overrides, block_ov)
         result = "ok" if ok else f"revert: {reason}"
@@ -339,17 +376,10 @@ class Rehearsal:
             gas, gas_err = self.estimate(tx, est_overrides if est_overrides is not None else overrides)
             if gas is None:
                 gas_note = f"estimateGas failed: {gas_err}"
-        if expect is None:
-            match = "info"
-        elif expect == "ok":
-            match = "yes" if ok else "NO"
-        elif expect == "revert":
-            match = "yes" if not ok else "NO"
-        else:
-            match = "yes" if (not ok and expect.lower() in reason.lower()) else "NO"
+        match = match_outcome(expect, ok, reason)
         post = self.run_probe(**probe) if probe else ""
         row = {
-            "step": name, "caller": caller.address, "expected": expect or "(observe)", "result": result,
+            "step": name, "caller": caller.address, "expected": expect, "result": result,
             "match": match, "gas": gas, "cost_usdc": cost_str(gas), "post_state": post,
             "note": "; ".join(x for x in (note, gas_note) if x), "return": ret if ok else None,
         }
@@ -536,8 +566,8 @@ class Rehearsal:
         # EIP-7702: a payer address carrying a delegation is checked by USDC only through ERC-1271.
         delegated = {payer.address: {"code": "0xef0100" + self.keeper.address[2:].lower()}}
         self.step("payWithAuthorization, payer has an EIP-7702 delegation to a code-less address", relayer, pwa,
-                  self.base(open1, payer_funds, delegated), None,
-                  note="code override 0xef0100 + address; observes the real token's ERC-1271 branch")
+                  self.base(open1, payer_funds, delegated), "invalid signature",
+                  note="code override 0xef0100 + address; the real token takes its ERC-1271 branch")
 
         # blocklist, simulated through the real blocklist precompile's storage
         if blocklist_ok:
@@ -546,7 +576,7 @@ class Rehearsal:
 
             note = "blocklist set by state override of precompile 0x1800..01 storage"
             self.step("claim to a blocklisted payee", payee, bill_data("claim"),
-                      self.base(paid(), blocked(payee.address)), "revert", note=note)
+                      self.base(paid(), blocked(payee.address)), BLOCKED, note=note)
             self.step("refund to payer after claimBy while payee is blocklisted", keeper, bill_data("refund"),
                       self.base(paid(), blocked(payee.address)), "ok", block_ov=at_claim_by,
                       est_overrides=self.base(paid(cb=self.now), blocked(payee.address)), note=note,
@@ -554,28 +584,29 @@ class Rehearsal:
                              "watch": [("payer", payer.address), ("contract", self.pt)],
                              "overrides": self.base(paid(), blocked(payee.address)), "block_ov": at_claim_by})
             self.step("refund to a blocklisted payer", keeper, bill_data("refund"),
-                      self.base(paid(), blocked(payer.address)), "revert", block_ov=at_claim_by, note=note)
+                      self.base(paid(), blocked(payer.address)), BLOCKED, block_ov=at_claim_by, note=note)
             self.step("decline to a blocklisted payer", payee, bill_data("decline"),
-                      self.base(paid(), blocked(payer.address)), "revert", note=note)
+                      self.base(paid(), blocked(payer.address)), BLOCKED, note=note)
             self.step("payWithAuthorization by a blocklisted payer", relayer, pwa,
-                      self.base(open1, payer_funds, blocked(payer.address)), "revert", note=note)
+                      self.base(open1, payer_funds, blocked(payer.address)), BLOCKED, note=note)
             if allowance_ok:
                 self.step("pay by a blocklisted payer", payer, bill_data("pay"),
                           self.base(open1, payer_funds, self.allowance_override(payer.address, self.pt, AMOUNT),
-                                    blocked(payer.address)), "revert", note=note)
+                                    blocked(payer.address)), BLOCKED, note=note)
             self.step("claim while the contract itself is blocklisted", payee, bill_data("claim"),
-                      self.base(paid(), blocked(self.pt)), "revert", note=note)
+                      self.base(paid(), blocked(self.pt)), BLOCKED, note=note)
             # Who is checked? Calls where the blocklisted address only sends the transaction (it is not a party to
-            # the USDC movement, which goes contract -> someone else).
+            # the USDC movement, which goes contract -> someone else). First observed on 2026-10-01, asserted since:
+            # a blocklisted sender is refused anyway; a blocklisted payer does not stop the payee's claim.
             self.step("decline sent by a blocklisted payee (money goes to the payer)", payee, bill_data("decline"),
-                      self.base(paid(), blocked(payee.address)), None, note=note)
+                      self.base(paid(), blocked(payee.address)), BLOCKED, note=note)
             self.step("refund sent by a blocklisted third party (money goes to the payer)", keeper,
-                      bill_data("refund"), self.base(paid(), blocked(keeper.address)), None, block_ov=at_claim_by,
+                      bill_data("refund"), self.base(paid(), blocked(keeper.address)), BLOCKED, block_ov=at_claim_by,
                       note=note)
             self.step("claim by the payee while the payer is blocklisted", payee, bill_data("claim"),
-                      self.base(paid(), blocked(payer.address)), None, note=note)
+                      self.base(paid(), blocked(payer.address)), "ok", note=note)
             self.step("payWithAuthorization sent by a blocklisted relayer for a clean payer", relayer, pwa,
-                      self.base(open1, payer_funds, blocked(relayer.address)), None, note=note)
+                      self.base(open1, payer_funds, blocked(relayer.address)), BLOCKED, note=note)
         else:
             self.skip("blocklist cases", "blocklist slot assumption failed")
 
@@ -585,13 +616,13 @@ class Rehearsal:
             note = f"{real} is blocklisted on Arc mainnet (USDC.isBlacklisted = true at this block); no override"
             claimer = type("Caller", (), {"address": real})()
             self.step("claim to a really blocklisted payee", claimer, bill_data("claim"),
-                      self.base(paid(payee_addr=real)), "revert", note=note)
+                      self.base(paid(payee_addr=real)), BLOCKED, note=note)
             self.step("refund to a really blocklisted payer", keeper, bill_data("refund"),
-                      self.base(paid(payer_addr=real)), "revert", block_ov=at_claim_by, note=note)
+                      self.base(paid(payer_addr=real)), BLOCKED, block_ov=at_claim_by, note=note)
             self.step("decline to a really blocklisted payer", payee, bill_data("decline"),
-                      self.base(paid(payer_addr=real)), "revert", note=note)
+                      self.base(paid(payer_addr=real)), BLOCKED, note=note)
             self.step("decline sent by a really blocklisted payee (eth_call from that address)", claimer,
-                      bill_data("decline"), self.base(paid(payee_addr=real)), None,
+                      bill_data("decline"), self.base(paid(payee_addr=real)), BLOCKED,
                       note=note + "; eth_call only, whether Arc admits a transaction from it is not tested")
         else:
             self.skip("real blocklisted address", "no candidate address is blocklisted at this block", fail=False)
@@ -644,8 +675,8 @@ class Rehearsal:
 
     def skip(self, name: str, why: str, fail: bool = True):
         self.steps.append({"step": name, "caller": "-", "expected": "-", "result": f"skipped: {why}",
-                           "match": "NO" if fail else "info", "gas": None, "cost_usdc": "-", "post_state": "", "note": "",
-                           "return": None})
+                           "match": "NO" if fail else "skipped", "gas": None, "cost_usdc": "-", "post_state": "",
+                           "note": "", "return": None})
 
     # ---- report
 
@@ -671,11 +702,11 @@ class Rehearsal:
                 f"| {i} | {s['step']} | {s['expected']} | {s['result']} | {s['match']} | {gas} | {s['cost_usdc']} "
                 f"| {s['post_state']} | {s['note']} |"
             )
+        lines += ["", verdict(self.steps, self.checks)[1]]
         return "\n".join(lines) + "\n"
 
     def passed(self) -> bool:
-        checks_ok = all(c["ok"] or not c["required"] for c in self.checks)
-        return checks_ok and all(s["match"] in ("yes", "info") for s in self.steps)
+        return verdict(self.steps, self.checks)[0]
 
 
 def main() -> int:
@@ -693,11 +724,12 @@ def main() -> int:
     if a.markdown:
         with open(a.markdown, "w", encoding="utf-8", newline="\n") as f:
             f.write(md)
+    ok, line = verdict(r.steps, r.checks)
     if a.json:
         with open(a.json, "w", encoding="utf-8", newline="\n") as f:
-            json.dump({"block": r.block_number, "time": r.now, "checks": r.checks, "steps": r.steps}, f, indent=2)
-    ok = r.passed()
-    print("ALL STEPS MATCHED" if ok else "SOME STEPS DID NOT MATCH", flush=True)
+            json.dump({"block": r.block_number, "time": r.now, "passed": ok, "verdict": line, "checks": r.checks,
+                       "steps": r.steps}, f, indent=2)
+    print(line, flush=True)
     return 0 if ok else 1
 
 
