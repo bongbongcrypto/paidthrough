@@ -103,8 +103,11 @@ def _ids(items) -> str:
     return head + (" 외 %d건" % (len(ids) - 4) if len(ids) > 4 else "")
 
 
-def summary_card(network: str, sent: list, skipped: list, failed: list, error: str = "") -> str:
+def summary_card(network: str, sent: list, skipped: list, failed: list, error: str = "",
+                 below_min: int = 0) -> str:
     """sent: [{'id', 'amount' (6-dec units), 'fee_wei'}]; skipped: [{'id','reason'}]; failed: [{'id','why'}].
+    below_min: count of due bills under the keeper minimum. It is only a count inside a card that is sent
+    anyway: dust bills alone never trigger a message (they would every 5 minutes).
     Returns '' when there is nothing worth a message."""
     from fmt import usdc6, fee_usdc  # local import keeps this module importable alone
 
@@ -136,6 +139,12 @@ def summary_card(network: str, sent: list, skipped: list, failed: list, error: s
         title, todo = "%s 자동 환불 %d건 완료" % (net, len(sent)), "없음"
     else:
         title, todo = "%s 자동 환불 %d건 보류" % (net, len(skipped)), "없음, 다음 실행 때 다시 확인"
+    if below_min:
+        note = "아주 작은 청구서 %d건은 키퍼가 건너뜀 (낸 사람이 직접 환불 가능)." % below_min
+        if len(lines) < MAX_BODY:
+            lines.append(note)
+        else:
+            title += ", 소액 %d건 제외" % below_min
     return card(title, lines[:MAX_BODY], todo=todo, tag=TAG)
 
 

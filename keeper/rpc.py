@@ -143,11 +143,16 @@ class Rpc:
         return self.call("eth_call", [tx, block])
 
     def get_logs_chunked(self, address: str, topics, from_block: int, to_block: int,
-                         chunk: int = DEFAULT_CHUNK, on_chunk=None) -> list:
+                         chunk: int = DEFAULT_CHUNK, on_chunk=None, on_overflow=None) -> list:
         """All logs in [from_block, to_block], inclusive, in chunks of at most `chunk` blocks.
         On a range/limit error the chunk halves (down to 1 block) and the same window is retried;
         after a run of successes it grows back toward `chunk`. Anything else propagates: a failed
-        read is 'unknown', never 'no logs'."""
+        read is 'unknown', never 'no logs'.
+
+        A single block that still overflows (more matching logs in one block than the node will return,
+        e.g. a spam block) raises, unless `on_overflow(block, error)` is given: its return value (a list
+        of logs it could recover for that block) is used and the scan moves on to the next block. The
+        caller then owns the fact that this block's logs may be incomplete."""
         if from_block > to_block:
             return []
         logs = []
@@ -164,6 +169,17 @@ class Rpc:
                 if not is_range_error(e):
                     raise
                 window = end - start + 1
+                if window <= MIN_CHUNK and on_overflow is not None:
+                    part = on_overflow(start, e)
+                    if not isinstance(part, list):
+                        raise RpcUnavailable("on_overflow for block %d returned %r" % (start, type(part).__name__))
+                    logs.extend(part)
+                    if on_chunk:
+                        on_chunk(start, start, len(part))
+                    start += 1
+                    size = ceiling       # the blocks after a spam block are usually normal
+                    streak = 0
+                    continue
                 if window <= MIN_CHUNK:
                     raise RpcError("eth_getLogs", {"code": e.code, "message": "range error even for one block: "
                                                    + e.message}) from None

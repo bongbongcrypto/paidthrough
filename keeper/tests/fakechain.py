@@ -70,6 +70,9 @@ class FakeChain:
         self.get_logs_calls = []
         self.fail_methods = {}               # method -> error dict (raised as JSON-RPC error)
         self.bill_count_override = None
+        self.max_results = None              # Arc-style result cap (-32602 "exceeds max results"), any range size
+        self.cap_counts_all_topics = False   # pessimistic node: counts every log of the address, not just matches
+        self.topic_filters = []              # topic0 sets the keeper asked for
 
     # --- building history ---
     def _emit(self, block, topic0, topics, data_types, data_values):
@@ -100,6 +103,13 @@ class FakeChain:
         claim_by = claim_by if claim_by is not None else self.head_ts - 10
         b.update(payer=payer, claimBy=claim_by, status=abi.PAID)
         self._emit(block, abi.EVENTS["Paid"][0], [_t_uint(bid), _t_addr(payer)], ["uint64"], [claim_by])
+
+    def spam_cancel_block(self, first_id, n, issue_from_block, block, per_block=100):
+        """n bills issued `per_block` per block from issue_from_block, then all cancelled in one block."""
+        for k in range(n):
+            self.issue(first_id + k, issue_from_block + k // per_block, amount=1)
+        for k in range(n):
+            self.cancel(first_id + k, block)
 
     def cancel(self, bid, block):
         self.bills[bid]["status"] = abi.CANCELLED
@@ -158,10 +168,18 @@ class FakeChain:
             self.get_logs_calls.append((frm, to))
             if to - frm + 1 > self.max_range:
                 raise RpcError(method, {"code": -32012, "message": "requested range too large"})
-            want = set(t.lower() for t in q["topics"][0])
-            return [dict(lg) for lg in self.logs
-                    if frm <= int(lg["blockNumber"], 16) <= to and lg["topics"][0] in want
-                    and lg["address"] == q["address"].lower()]
+            t0 = q["topics"][0]
+            want = set(t.lower() for t in ([t0] if isinstance(t0, str) else t0))
+            self.topic_filters.append(frozenset(want))
+            in_range = [lg for lg in self.logs if frm <= int(lg["blockNumber"], 16) <= to
+                        and lg["address"] == q["address"].lower()]
+            out = [dict(lg) for lg in in_range if lg["topics"][0] in want]
+            if self.max_results is not None:
+                counted = in_range if self.cap_counts_all_topics else out
+                if len(counted) > self.max_results:
+                    raise RpcError(method, {"code": -32602, "message": (
+                        "request exceeded max allowed range: query exceeds max results %d" % self.max_results)})
+            return out
         if method == "eth_call":
             tx = params[0]
             if tx["to"].lower() != self.contract.lower():

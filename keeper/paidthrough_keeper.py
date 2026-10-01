@@ -36,7 +36,7 @@ import abi  # noqa: E402
 import notify as notifier  # noqa: E402
 import state as st  # noqa: E402
 from fmt import GWEI, fee_usdc, gwei, short, usdc6, utc  # noqa: E402
-from rpc import DEFAULT_CHUNK, Rpc, RpcError, RpcUnavailable  # noqa: E402
+from rpc import DEFAULT_CHUNK, Rpc, RpcError, RpcUnavailable, is_range_error  # noqa: E402
 
 NETWORKS = {
     "mainnet": {"rpc": "https://rpc.mainnet.arc.io", "chainId": 5042},
@@ -47,7 +47,7 @@ MIN_FEE_FLOOR = 20 * GWEI          # Arc base fee floor; underpriced tx are drop
 GAS_MULT_NUM, GAS_MULT_DEN = 12, 10  # gas limit = ceil(estimate * 1.2)
 RESCAN_OVERLAP = 100               # blocks re-read on every incremental scan
 INFLIGHT_DROP_BLOCKS = 1200        # ~10 min at 0.5 s blocks: unmined and unknown to the node -> presumed dropped
-MAX_MISSING_GETBILL = 500          # ids absent from events that we fill by direct getBill reads
+MAX_MISSING_GETBILL = 5000         # new ids per run absent from events, filled by direct getBill reads
 SKIP_RENOTIFY_S = 24 * 3600
 ERROR_RENOTIFY_S = 6 * 3600
 DEPLOYMENTS = HERE / "deployments.json"
@@ -157,9 +157,13 @@ def state_file(d: Path, network: str, contract: str, from_block: int) -> Path:
     return d / ("%s-%s-%d.json" % (network, contract.lower(), from_block))
 
 
+STATE_VERSION = 2   # v2: logs no longer include BillCancelled; adds seeds / terminal / lost / degraded
+
+
 def load_state(path: Path, chain_id: int, contract: str, from_block: int) -> dict:
-    blank = {"version": 1, "chainId": chain_id, "contract": contract, "fromBlock": from_block,
-             "scannedTo": None, "logs": [], "inflight": {}, "notified": {}}
+    blank = {"version": STATE_VERSION, "chainId": chain_id, "contract": contract, "fromBlock": from_block,
+             "scannedTo": None, "logs": [], "inflight": {}, "notified": {}, "seeds": {}, "terminal": {},
+             "lost": [], "degraded": False}
     if not path or not path.exists():
         return blank
     try:
@@ -167,12 +171,17 @@ def load_state(path: Path, chain_id: int, contract: str, from_block: int) -> dic
     except (OSError, ValueError):
         print("warning: state file %s unreadable; rebuilding from events" % path, file=sys.stderr)
         return blank
-    if (data.get("version") != 1 or data.get("chainId") != chain_id
-            or str(data.get("contract", "")).lower() != contract.lower() or data.get("fromBlock") != from_block):
+    if (data.get("chainId") != chain_id or str(data.get("contract", "")).lower() != contract.lower()
+            or data.get("fromBlock") != from_block):
         print("warning: state file %s is for another deployment; rebuilding" % path, file=sys.stderr)
         return blank
-    for k in ("logs", "inflight", "notified"):
-        data.setdefault(k, [] if k == "logs" else {})
+    if data.get("version") != STATE_VERSION:
+        # older layout: re-read the logs, but never forget a sent-but-unconfirmed refund
+        blank["inflight"] = data.get("inflight") or {}
+        blank["notified"] = data.get("notified") or {}
+        return blank
+    for k, v in blank.items():
+        data.setdefault(k, v)
     return data
 
 
@@ -234,13 +243,41 @@ def scan_logs(ctx: Ctx, cache: dict) -> list:
     block minus RESCAN_OVERLAP; cached logs at or above the rescan point are replaced by fresh ones.
     The cache holds the RAW logs (chain truth) and they are decoded again on every run, so a decoder
     fix can never be masked by stale cached decodes. The cache is updated only after the whole range
-    was read and decoded."""
+    was read and decoded.
+
+    Only abi.KEEPER_TOPICS are read (no BillCancelled). If one block holds more of our logs than the RPC
+    returns for a single-block query, that block is re-read one event type at a time; a type that still
+    overflows is recorded in cache["lost"] and the scan continues (build_bills then fills the gap with
+    getBill). A spam block can therefore never stop the keeper or freeze its cache."""
     start = ctx.from_block
     kept = []
     if cache.get("scannedTo") is not None:
         start = max(ctx.from_block, int(cache["scannedTo"]) - RESCAN_OVERLAP + 1)
         kept = [lg for lg in cache["logs"] if int(lg["blockNumber"], 16) < start]
-    got = ctx.rpc.get_logs_chunked(ctx.contract, [abi.ALL_TOPICS], start, ctx.head, chunk=DEFAULT_CHUNK)
+    lost = []
+
+    def overflow(block, err):
+        part_logs = []
+        for name in abi.KEEPER_EVENTS:
+            try:
+                part = ctx.rpc.call("eth_getLogs", [{"address": ctx.contract, "topics": [abi.EVENTS[name][0]],
+                                                     "fromBlock": hex(block), "toBlock": hex(block)}])
+            except RpcError as e:
+                if not is_range_error(e):
+                    raise
+                lost.append([name, block])
+                continue
+            if not isinstance(part, list):
+                raise RpcUnavailable("eth_getLogs block %d returned %r" % (block, type(part).__name__))
+            part_logs.extend(part)
+        here = [n for n, b in lost if b == block]
+        ctx.warn("block %d holds more logs than the RPC returns in one query (%s); %s" % (
+            block, err.message[:80],
+            ("lost its %s logs, filling from getBill" % ",".join(here)) if here else "read it per event type"))
+        return part_logs
+
+    got = ctx.rpc.get_logs_chunked(ctx.contract, [abi.KEEPER_TOPICS], start, ctx.head, chunk=DEFAULT_CHUNK,
+                                   on_overflow=overflow)
     fresh = []
     for lg in got:
         if lg.get("removed"):
@@ -255,6 +292,12 @@ def scan_logs(ctx: Ctx, cache: dict) -> list:
         by_key[(int(lg["blockNumber"], 16), int(lg["logIndex"], 16))] = lg
     cache["logs"] = [by_key[k] for k in sorted(by_key)]
     cache["scannedTo"] = ctx.head
+    known = cache.setdefault("lost", [])
+    for item in lost:
+        if item not in known:
+            known.append(item)
+        if item[0] in abi.LIFECYCLE_EVENTS:
+            cache["degraded"] = True   # sticky: from now on getBill decides every Open/Paid bill
     return decoded
 
 
@@ -266,22 +309,74 @@ def bill_count(ctx: Ctx) -> int:
     return abi.decode_uint(ctx.rpc.eth_call(ctx.contract, abi.encode_bill_count(), block=hex(ctx.head)))
 
 
-def build_bills(ctx: Ctx, cache: dict) -> dict:
-    """Fold events, then cross-check against billCount() at the same block. Ids the events missed
-    are read directly with getBill and flagged: an empty or short getLogs answer is 'unknown', not 'no bills'."""
-    bills = st.fold(scan_logs(ctx, cache))
+TERMINAL = (abi.CLAIMED, abi.REFUNDED, abi.DECLINED, abi.CANCELLED)
+
+
+def _adopt(ctx: Ctx, bills: dict, cache: dict, bid: int, b: abi.Bill, why: str) -> None:
+    """Make getBill the record for `bid` when it disagrees with the events. Open -> Cancelled is expected
+    (BillCancelled is not scanned) and silent; anything else is a warning."""
+    rec = bills.get(bid)
+    if b.status in TERMINAL:
+        cache.setdefault("terminal", {})[str(bid)] = b.status   # terminal states never change
+    if rec is not None and not rec.broken and not st.matches_chain(rec, b):
+        return
+    if rec is not None and not rec.broken and rec.status == abi.OPEN and b.status == abi.CANCELLED:
+        rec.status = abi.CANCELLED
+        return
+    if rec is not None and rec.source != "getBill":
+        ctx.warn("bill %d: %s; events say %s, getBill says %s - using getBill" % (
+            bid, why, rec.status_name, b.status_name))
+    new = st.BillRecord.from_bill(b)
+    if rec is not None:
+        new.history = rec.history
+    bills[bid] = new
+
+
+def build_bills(ctx: Ctx, cache: dict, refresh_open: bool = False) -> dict:
+    """Fold events, then cross-check against billCount() at the same block. An empty or short getLogs
+    answer is 'unknown', not 'no bills':
+      * ids 1..billCount() with no BillIssued log are read with getBill once; their immutable fields are
+        kept in cache["seeds"] so later events for them still fold;
+      * after a lost lifecycle log (cache["degraded"]), every Open/Paid bill is re-read with getBill;
+      * refresh_open (scan, bill): Open-looking bills are re-read, since BillCancelled is not scanned.
+    Bills getBill has shown to be in a terminal state are remembered in cache["terminal"]."""
+    events = scan_logs(ctx, cache)
     count = bill_count(ctx)
-    top = max(bills) if bills else 0
+    top = max((ev["billId"] for ev in events), default=0)
     if top > count:
         raise st.ImpossibleTransition("events show bill %d but billCount() is %d at block %d" % (top, count, ctx.head))
-    missing = [i for i in range(1, count + 1) if i not in bills]
+    issued = {ev["billId"] for ev in events if ev["event"] == "Issued"}
+    seeds = cache.setdefault("seeds", {})
+    missing = [i for i in range(1, count + 1) if i not in issued and str(i) not in seeds]
+    reads = {}
     if missing:
-        ctx.warn("%d bill(s) have no BillIssued event in blocks %d..%d (ids %s%s); reading them with getBill" % (
+        ctx.warn("%d bill(s) have no BillIssued log in blocks %d..%d (ids %s%s); reading them with getBill" % (
             len(missing), ctx.from_block, ctx.head, missing[:10], "..." if len(missing) > 10 else ""))
         if len(missing) > MAX_MISSING_GETBILL:
             raise RpcUnavailable("%d bills missing from events; from-block is probably wrong" % len(missing))
         for i in missing:
-            bills[i] = st.BillRecord.from_bill(get_bill(ctx, i, block=hex(ctx.head)))
+            b = get_bill(ctx, i, block=hex(ctx.head))
+            if b.status == abi.NONE:
+                raise st.ImpossibleTransition("getBill(%d) is empty but billCount() is %d" % (i, count))
+            seeds[str(i)] = {k: getattr(b, k) for k in st.IMMUTABLE}
+            reads[i] = b
+    degraded = bool(cache.get("degraded"))
+    bills = st.fold(events, seeds={int(k): v for k, v in seeds.items()}, strict=not degraded)
+    for k, status in cache.get("terminal", {}).items():
+        rec = bills.get(int(k))
+        if rec is not None and rec.status not in TERMINAL:
+            rec.status = status
+    for i, b in reads.items():
+        _adopt(ctx, bills, cache, i, b, "BillIssued log missing")
+    recheck = set()
+    if degraded:
+        recheck |= {i for i, r in bills.items() if r.broken or r.status in (abi.OPEN, abi.PAID)}
+        ctx.warn("degraded: lifecycle logs were lost at blocks %s; reading %d Open/Paid bills with getBill" % (
+            [b for n, b in cache.get("lost", []) if n in abi.LIFECYCLE_EVENTS][:5], len(recheck)))
+    if refresh_open:
+        recheck |= {i for i, r in bills.items() if r.status == abi.OPEN}
+    for i in sorted(recheck - set(reads)):
+        _adopt(ctx, bills, cache, i, get_bill(ctx, i, block=hex(ctx.head)), "log missing")
     return bills
 
 
@@ -302,7 +397,7 @@ def head_line(ctx: Ctx) -> str:
 
 
 def cmd_scan(ctx: Ctx, cache: dict) -> int:
-    bills = build_bills(ctx, cache)
+    bills = build_bills(ctx, cache, refresh_open=True)   # true status of Open-looking (maybe cancelled) bills
     ctx.p(head_line(ctx))
     print_table(ctx, [bills[k] for k in sorted(bills)])
     counts = {}
@@ -338,11 +433,16 @@ def cmd_bill(ctx: Ctx, cache: dict, bill_id: int) -> int:
                  ("claimBy", "%s (%d)" % (utc(b.claimBy), b.claimBy)), ("ref", b.ref)):
         ctx.p("  %-12s %s" % (f, v))
     ctx.p("  %-12s %s" % ("due now", "yes" if st.is_due(b, ctx.head_ts) else "no"))
-    bills = st.fold(scan_logs(ctx, cache))
+    bills = build_bills(ctx, cache)
     rec = bills.get(bill_id)
     if rec is None:
         ctx.warn("no events found for bill %d from block %d" % (bill_id, ctx.from_block))
         return 1
+    if b.status == abi.CANCELLED and not any(ev["event"] == "Cancelled" for ev in rec.history):
+        rec.status = abi.CANCELLED   # BillCancelled is not scanned by the keeper; getBill is the truth
+        ctx.p("  (cancelled: status from getBill; the keeper does not scan BillCancelled logs)")
+    if rec.source != "events":
+        ctx.p("  (BillIssued log for this bill could not be read; issue fields came from getBill)")
     ctx.p("events:")
     for ev in rec.history:
         extra = {k: v for k, v in ev.items() if k not in ("event", "billId", "blockNumber", "logIndex", "txHash")}
@@ -476,13 +576,15 @@ def resolve_inflight(ctx: Ctx, cache: dict) -> set:
 
 def cmd_run(ctx: Ctx, cache: dict, args, key: KeeperKey = None, sleep=time.sleep, clock=time.monotonic) -> tuple:
     """Returns (exit code, summary dict for the notifier)."""
-    summary = {"sent": [], "skipped": [], "failed": []}
+    summary = {"sent": [], "skipped": [], "failed": [], "below_min": 0}
     sender = key.address if key else (args.from_address or ZERO)
     blocked = resolve_inflight(ctx, cache) if args.send else set()
     bills = build_bills(ctx, cache)
     due = st.due(bills, ctx.head_ts)
     ctx.p(head_line(ctx))
-    ctx.p("mode: %s  sender %s  due bills: %d" % ("SEND" if args.send else "dry-run", sender, len(due)))
+    small = sum(1 for r in due if r.amount < args.min_amount)
+    ctx.p("mode: %s  sender %s  due bills: %d (%d below the %s USDC keeper minimum)" % (
+        "SEND" if args.send else "dry-run", sender, len(due), small, usdc6(args.min_amount)))
     if not due:
         return 0, summary
     priority = int(ctx.rpc.call("eth_maxPriorityFeePerGas", []), 16)
@@ -490,7 +592,12 @@ def cmd_run(ctx: Ctx, cache: dict, args, key: KeeperKey = None, sleep=time.sleep
     exit_code = 0
     sends = 0
     stop_reason = None
-    for rec in due:
+    for rec in due:   # largest amount first (st.due_order), so dust can never delay a real refund
+        if rec.amount < args.min_amount:
+            summary["below_min"] += 1
+            ctx.p("  bill %d  SKIP below keeper minimum (%s < %s USDC) - payer can refund it themselves" % (
+                rec.id, usdc6(rec.amount), usdc6(args.min_amount)))
+            continue
         if stop_reason:
             summary["skipped"].append({"id": rec.id, "reason": stop_reason})
             ctx.p("  bill %d  SKIP %s" % (rec.id, stop_reason))
@@ -576,7 +683,8 @@ def maybe_notify(network: str, summary: dict, cache: dict, error: str = "", send
             if now - seen.get(k, 0) >= SKIP_RENOTIFY_S:
                 seen[k] = now
                 fresh.append(s)
-        text = notifier.summary_card(network, summary["sent"], fresh, summary["failed"])
+        text = notifier.summary_card(network, summary["sent"], fresh, summary["failed"],
+                                     below_min=summary.get("below_min", 0))
     if not text:
         return
     ok, why = sender(text)
@@ -584,6 +692,22 @@ def maybe_notify(network: str, summary: dict, cache: dict, error: str = "", send
 
 
 # ---------------------------------------------------------------- CLI
+DEFAULT_MIN_AMOUNT = 50_000   # 0.05 USDC in 6-decimal units, ~25x the expected refund gas (~0.002 USDC)
+
+
+def usdc_units(text: str) -> int:
+    """'0.05' -> 50000 (6-decimal units). Exact: more than 6 decimals or a negative value is refused."""
+    from decimal import Decimal, InvalidOperation
+    try:
+        d = Decimal(text)
+    except InvalidOperation:
+        raise argparse.ArgumentTypeError("not a number: %r" % text) from None
+    units = d * 10 ** 6
+    if not d.is_finite() or d < 0 or units != units.to_integral_value():
+        raise argparse.ArgumentTypeError("USDC amount must be >= 0 with at most 6 decimals: %r" % text)
+    return int(units)
+
+
 def _global_options(p, defaults: bool):
     d = (lambda v: v) if defaults else (lambda v: argparse.SUPPRESS)
     p.add_argument("--network", choices=sorted(NETWORKS), default=d("mainnet"))
@@ -612,6 +736,8 @@ def parse(argv):
     r.add_argument("--notify", action="store_true", help="send one Telegram summary")
     r.add_argument("--from-address", help="dry-run simulation sender (default zero address)")
     r.add_argument("--max-sends", type=int, default=20)
+    r.add_argument("--min-amount", type=usdc_units, default=DEFAULT_MIN_AMOUNT, metavar="USDC",
+                   help="skip bills below this amount (default 0.05): the payer can call refund themselves")
     r.add_argument("--max-fee-gwei", type=float, default=500.0, help="skip if maxFeePerGas would exceed this")
     r.add_argument("--receipt-timeout", type=float, default=90.0)
     r.add_argument("--poll", type=float, default=1.0)

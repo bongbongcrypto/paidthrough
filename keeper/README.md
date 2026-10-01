@@ -16,6 +16,10 @@ A small Python CLI that finds PaidThrough bills whose claim window has passed an
 - It cannot refund early: the contract only allows `refund` at or after `claimBy`, and the keeper
   simulates every call with `eth_call` first. A bill whose simulation reverts (for example a
   payer address blocklisted by USDC) is skipped and reported, then checked again on the next run.
+- It skips dust: due bills below `--min-amount` (default 0.05 USDC, about 25x the expected refund gas)
+  are listed as "below keeper minimum - payer can refund it themselves" and never simulated or sent.
+  Due bills are handled largest amount first (ties: longest-waiting first), so bulk-created tiny bills
+  cannot push a real refund behind `--max-sends`.
 
 ## Run it (dry-run, no key needed)
 
@@ -35,7 +39,7 @@ every command prints "no deployment configured" and exits 0. After deploy, fill 
 
 Other options: `--rpc URL`, `--state-dir DIR` (scan cache, default `~/.paidthrough-keeper`),
 `--no-cache` (re-read all logs), and for `run`: `--from-address` (dry-run simulation sender),
-`--max-sends 20`, `--max-fee-gwei 500`, `--receipt-timeout 90`.
+`--max-sends 20`, `--min-amount 0.05`, `--max-fee-gwei 500`, `--receipt-timeout 90`.
 
 Exit codes: 0 ok (skipped bills included), 1 error or unknown chain state, 2 refused (config, key, chain id).
 
@@ -57,12 +61,19 @@ run `run --send --notify --network mainnet` every 5 minutes with `MemoryMax=200M
 
 ## How it reads the chain
 
-- Rebuilds bills by folding `BillIssued / Cancelled / Paid / Claimed / Declined / Refunded` events.
+- Rebuilds bills by folding `BillIssued / Paid / Claimed / Declined / Refunded` events.
   An impossible transition (for example `Paid` after `Claimed`) stops the run: that would mean a
   decoding bug, and the keeper must not act on a wrong picture.
+- `BillCancelled` is not scanned: a cancelled bill was never paid, so it never matters for refunds, and
+  it is cheap enough to emit thousands of times in one block. `scan` and `bill` read the true status of
+  Open-looking bills with `getBill` (remembered once a bill is in a final state).
 - `eth_getLogs` in chunks of 10,000 blocks (Arc's limit, measured 2026-10-01), halving on a range or
   result-count error. Raw logs are cached with the last scanned block so each 5-minute run only reads
   new blocks (plus a 100-block overlap).
+- A single block with more logs than the RPC returns is re-read one event type at a time; a type that
+  still overflows is recorded and the scan moves on. Missing `BillIssued` logs are filled from `getBill`
+  (ids are sequential up to `billCount()`); a lost `Paid/Claimed/Declined/Refunded` log switches the
+  keeper to reading every Open/Paid bill with `getBill`. A spam block cannot stop the keeper.
 - Cross-checks `billCount()`: an id with no events is read with `getBill` and flagged, so an empty or
   short RPC answer is treated as unknown, never as "no bills".
 - Before each refund it re-reads `getBill`, simulates, and checks the keeper's gas balance. A sent

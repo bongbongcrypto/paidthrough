@@ -32,7 +32,9 @@ class BillRecord:
     status: int = NONE
     ref: str = "0x" + "00" * 32
     history: list = field(default_factory=list)   # decoded logs, in chain order
-    source: str = "events"                         # "events" or "getBill" (filled from a direct read)
+    source: str = "events"                         # "events", "seed" (Issued log lost, immutables from getBill)
+                                                   # or "getBill" (whole record from a direct read)
+    broken: str = ""                               # lenient fold only: why this record cannot be trusted
 
     @property
     def status_name(self) -> str:
@@ -130,10 +132,44 @@ def apply(bills: dict, ev: dict) -> None:
     rec.history.append(ev)
 
 
-def fold(events) -> dict:
+IMMUTABLE = ("payee", "amount", "payBy", "claimWindow", "allowedPayer", "ref")
+
+
+def seed_record(bid: int, imm: dict) -> BillRecord:
+    """An Open record built from a bill's immutable fields (read with getBill) when its BillIssued log
+    could not be read. Every later event still applies on top of it."""
+    return BillRecord(bid, payee=imm["payee"], amount=int(imm["amount"]), payBy=int(imm["payBy"]),
+                      claimWindow=int(imm["claimWindow"]), allowedPayer=imm["allowedPayer"], status=OPEN,
+                      ref=imm["ref"], source="seed")
+
+
+def fold(events, seeds: dict = None, strict: bool = True) -> dict:
+    """seeds: {billId: immutable fields} for bills whose BillIssued log is missing (see seed_record).
+    strict=False (degraded mode, after lifecycle logs were lost): a bill that hits an impossible transition
+    is marked `broken` and its later events are ignored, instead of stopping the whole fold; the caller
+    must then read that bill with getBill."""
     bills: dict = {}
+    for bid, imm in (seeds or {}).items():
+        bills[int(bid)] = seed_record(int(bid), imm)
     for ev in dedupe(events):
-        apply(bills, ev)
+        if ev["event"] == "Issued" and ev["billId"] in bills and bills[ev["billId"]].source == "seed":
+            seeded = bills.pop(ev["billId"])           # the real log turned up after all: use it
+            apply(bills, ev)
+            if seeded.history:
+                raise ImpossibleTransition("bill %d: events before its BillIssued log" % ev["billId"])
+            continue
+        rec = bills.get(ev["billId"])
+        if rec is not None and rec.broken:
+            continue
+        if strict:
+            apply(bills, ev)
+            continue
+        try:
+            apply(bills, ev)
+        except ImpossibleTransition as e:
+            if rec is None:
+                rec = bills[ev["billId"]] = BillRecord(ev["billId"], source="getBill")
+            rec.broken = str(e)
     return bills
 
 
@@ -142,8 +178,14 @@ def is_due(rec, block_timestamp: int) -> bool:
     return rec.status == PAID and rec.claimBy > 0 and rec.claimBy <= block_timestamp
 
 
+def due_order(rec):
+    """Largest amount first, then the bill that has waited longest (oldest claimBy), then id. Dust bills
+    created in bulk can therefore never push a real refund behind them."""
+    return (-rec.amount, rec.claimBy, rec.id)
+
+
 def due(bills: dict, block_timestamp: int) -> list:
-    return [bills[k] for k in sorted(bills) if is_due(bills[k], block_timestamp)]
+    return sorted((b for b in bills.values() if is_due(b, block_timestamp)), key=due_order)
 
 
 def matches_chain(rec: BillRecord, b: Bill) -> list:

@@ -170,7 +170,7 @@ class ReadTests(Base):
         self.chain.logs = [lg for lg in self.chain.logs if int(lg["topics"][1], 16) != 9]
         code, out, err = self.run_cli("due")
         self.assertEqual(code, 0)
-        self.assertIn("no BillIssued event", err)
+        self.assertIn("no BillIssued log", err)
         self.assertIn("*getBill", out)
         self.assertIn("2.500001", out)
 

@@ -71,6 +71,13 @@ EVENTS = {
 }
 TOPIC_TO_EVENT = {v[0]: k for k, v in EVENTS.items()}
 ALL_TOPICS = [v[0] for v in EVENTS.values()]
+# What the keeper scans. BillCancelled is left out on purpose: a cancelled bill was never Paid, so it never
+# matters for refunds, and it is the one event cheap enough (~9.5k gas) to emit thousands of times in one
+# block and overflow the RPC's per-query result cap (security review 2026-10-01). `scan`/`bill` read the
+# true status of Open-looking bills with getBill instead.
+KEEPER_EVENTS = ("Issued", "Paid", "Claimed", "Declined", "Refunded")
+KEEPER_TOPICS = [EVENTS[n][0] for n in KEEPER_EVENTS]
+LIFECYCLE_EVENTS = ("Paid", "Claimed", "Declined", "Refunded")
 
 # Known revert shapes. SPEC.md names the custom errors but not their argument lists; we map the
 # zero-argument form. A contract that adds arguments gets a different selector and is shown raw.
