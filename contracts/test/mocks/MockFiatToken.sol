@@ -16,6 +16,8 @@ contract MockFiatToken {
     bytes32 private constant EIP712_DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
 
+    bytes4 internal constant ERC1271_MAGIC = 0x1626ba7e; // isValidSignature(bytes32,bytes)
+
     /// @dev Where skimmed units go.
     address public constant SKIM_SINK = address(0x5C1A);
 
@@ -129,7 +131,7 @@ contract MockFiatToken {
         bytes32 structHash =
             keccak256(abi.encode(RECEIVE_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash));
-        require(_recover(digest, v, r, s) == from, "FiatTokenV2: invalid signature");
+        require(_isValidSignatureNow(from, digest, v, r, s), "FiatTokenV2: invalid signature");
 
         authorizationState[from][nonce] = true;
         emit AuthorizationUsed(from, nonce);
@@ -152,6 +154,19 @@ contract MockFiatToken {
             balanceOf[to] += value;
             emit Transfer(from, to, value);
         }
+    }
+
+    /// @dev Mirrors FiatToken v2.2 SignatureChecker: an address with code (a contract, or an EOA carrying an
+    ///      EIP-7702 delegation) is checked only through ERC-1271 isValidSignature; otherwise ECDSA.
+    function _isValidSignatureNow(address signer, bytes32 digest, uint8 v, bytes32 r, bytes32 s)
+        internal
+        view
+        returns (bool)
+    {
+        if (signer.code.length == 0) return _recover(digest, v, r, s) == signer;
+        (bool ok, bytes memory ret) =
+            signer.staticcall(abi.encodeWithSelector(ERC1271_MAGIC, digest, abi.encodePacked(r, s, v)));
+        return ok && ret.length >= 32 && abi.decode(ret, (bytes4)) == ERC1271_MAGIC;
     }
 
     /// @dev Same checks as FiatToken's ECRecover.recover: low-s, v in {27,28}, non-zero signer.

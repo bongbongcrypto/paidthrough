@@ -3,6 +3,7 @@ pragma solidity 0.8.30;
 
 import {PaidThroughBase} from "./utils/PaidThroughBase.sol";
 import {PaidThrough} from "../src/PaidThrough.sol";
+import {EcdsaSelfDelegate, NoErc1271Delegate} from "./mocks/Delegates.sol";
 
 /// @notice EIP-3009 payment path with real secp256k1 signatures (vm.sign) over the USDC EIP-712 domain.
 contract PaidThroughAuthTest is PaidThroughBase {
@@ -289,5 +290,37 @@ contract PaidThroughAuthTest is PaidThroughBase {
         assertEq(uint8(b.status), uint8(PaidThrough.Status.Open));
         assertEq(b.payer, address(0));
         assertEq(b.claimBy, 0);
+    }
+
+    // ---- EIP-7702-delegated payers: USDC checks addresses with code only through ERC-1271 ----
+
+    function test_delegatedPayer_withoutErc1271_cannotUseSignaturePath_butCanPay() public {
+        vm.etch(payer, type(NoErc1271Delegate).runtimeCode); // payer EOA now carries delegate code
+        uint256 id = _issue();
+        (uint8 v, bytes32 r, bytes32 s) = _signBill(PAYER_PK, id);
+        vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
+        pt.payWithAuthorization(id, payer, validAfter, validBefore, v, r, s);
+        _assertStatus(id, PaidThrough.Status.Open);
+
+        // Fallback path (approve + pay) still works for the same payer.
+        _pay(id, payer);
+        _assertStatus(id, PaidThrough.Status.Paid);
+        assertEq(usdc.balanceOf(address(pt)), AMOUNT);
+    }
+
+    function test_delegatedPayer_withErc1271_canUseSignaturePath() public {
+        vm.etch(payer, type(EcdsaSelfDelegate).runtimeCode);
+        uint256 id = _issue();
+        (uint8 v, bytes32 r, bytes32 s) = _signBill(PAYER_PK, id);
+        vm.prank(relayer);
+        pt.payWithAuthorization(id, payer, validAfter, validBefore, v, r, s);
+        _assertStatus(id, PaidThrough.Status.Paid);
+        assertEq(usdc.balanceOf(payer), START_BALANCE - AMOUNT);
+
+        // A signature by a different key is rejected by the delegate.
+        uint256 id2 = _issue();
+        (v, r, s) = _signBill(OTHER_PK, id2);
+        vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
+        pt.payWithAuthorization(id2, payer, validAfter, validBefore, v, r, s);
     }
 }

@@ -121,14 +121,19 @@ contract ArcForkTest is Test {
         uint256 id = pt.issue(AMOUNT, uint64(block.timestamp + 1 days), 1 days, payer, keccak256("arc-fork-a"));
         uint256 validBefore = block.timestamp + 1 hours;
         (uint8 v, bytes32 r, bytes32 s) = _authSig(pt, payer, id, validBefore);
-        vm.prank(makeAddr("arc-relayer"));
-        try pt.payWithAuthorization(id, payer, 0, validBefore, v, r, s) {
-            console2.log("payWithAuthorization on real USDC: ok");
-        } catch (bytes memory err) {
-            console2.log("payWithAuthorization on real USDC reverted:");
-            console2.logBytes(err);
-            revert("payWithAuthorization failed on fork");
+
+        // Small Foundry test keys are public; on Arc mainnet 0xB0B's address carries an EIP-7702 delegation.
+        // FiatToken checks any address with code only through ERC-1271, so record what the real token does.
+        console2.log("payer code length on Arc mainnet", payer.code.length);
+        bool paid = _tryAuthPay(pt, id, payer, validBefore, v, r, s);
+        if (!paid && payer.code.length > 0) {
+            console2.log("FINDING: payer carries code (EIP-7702 delegation); real USDC rejected the ECDSA signature");
+            console2.logBytes(payer.code);
+            vm.etch(payer, bytes("")); // local fork only: make the payer a plain EOA again
+            console2.log("cleared the delegation on the local fork; retrying as a plain EOA");
+            paid = _tryAuthPay(pt, id, payer, validBefore, v, r, s);
         }
+        assertTrue(paid, "payWithAuthorization on real USDC");
         assertEq(usdc.balanceOf(address(pt)), AMOUNT);
         assertTrue(usdc.authorizationState(payer, pt.authNonce(id)));
         vm.prank(payee);
@@ -136,6 +141,26 @@ contract ArcForkTest is Test {
         assertEq(usdc.balanceOf(payee), AMOUNT);
         assertEq(usdc.balanceOf(address(pt)), 0);
         console2.log("flow 1 (auth pay -> claim) ok; payer USDC left", usdc.balanceOf(payer));
+    }
+
+    function _tryAuthPay(
+        PaidThrough pt,
+        uint256 id,
+        address payer,
+        uint256 validBefore,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) internal returns (bool) {
+        vm.prank(makeAddr("arc-relayer"));
+        try pt.payWithAuthorization(id, payer, 0, validBefore, v, r, s) {
+            console2.log("payWithAuthorization on real USDC: ok");
+            return true;
+        } catch (bytes memory err) {
+            console2.log("payWithAuthorization on real USDC reverted:");
+            console2.logBytes(err);
+            return false;
+        }
     }
 
     /// @dev Flow 2: issue -> approve + pay -> warp to claimBy -> refund by a third party.
