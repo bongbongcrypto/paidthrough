@@ -102,23 +102,31 @@ contract PaidThroughHandler is Test {
         uint256 idx = _payablePayer(b, payerSeed);
         address payer = payers[idx];
         uint256 validBefore = ghostNow + 1 hours;
+        (uint8 v, bytes32 r, bytes32 s) = _signAuth(idx, id, b.amount, validBefore);
+        vm.prank(address(uint160(0x3000 + relayerSeed % 5)));
+        pt.payWithAuthorization(id, payer, 0, validBefore, v, r, s);
+        _afterPaid(id, payer, b.amount);
+        calls["payWithAuthorization"]++;
+    }
+
+    function _signAuth(uint256 idx, uint256 id, uint96 amount, uint256 validBefore)
+        internal
+        view
+        returns (uint8, bytes32, bytes32)
+    {
         bytes32 structHash = keccak256(
             abi.encode(
                 usdc.RECEIVE_WITH_AUTHORIZATION_TYPEHASH(),
-                payer,
+                payers[idx],
                 address(pt),
-                uint256(b.amount),
+                uint256(amount),
                 uint256(0),
                 validBefore,
                 pt.authNonce(id)
             )
         );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", usdc.DOMAIN_SEPARATOR(), structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(payerKeys[idx], digest);
-        vm.prank(address(uint160(0x3000 + relayerSeed % 5)));
-        pt.payWithAuthorization(id, payer, 0, validBefore, v, r, s);
-        _afterPaid(id, payer, b.amount);
-        calls["payWithAuthorization"]++;
+        return vm.sign(payerKeys[idx], digest);
     }
 
     function _afterPaid(uint256 id, address payer, uint96 amount) internal {

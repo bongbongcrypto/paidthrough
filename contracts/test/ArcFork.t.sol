@@ -58,20 +58,29 @@ contract ArcForkTest is Test {
 
     function test_arc_fundingAndFlows() public {
         if (!_fork()) return;
+        _logCoinbaseLink();
         address payer = vm.addr(PAYER_PK);
-        address payee = makeAddr("arc-payee");
+        if (!_fundPayer(payer)) return;
 
-        // Diagnostic: does the fork link native balance (18 dec) and the ERC-20 view (6 dec)?
+        PaidThrough pt = new PaidThrough(ARC_USDC, MAX_AMOUNT);
+        _flowAuthPayThenClaim(pt, payer);
+        _flowPayThenRefund(pt, payer);
+    }
+
+    /// @dev Diagnostic: does the fork link native balance (18 dec) and the ERC-20 view (6 dec)?
+    function _logCoinbaseLink() internal view {
         address cb = block.coinbase;
         console2.log("coinbase", cb);
         console2.log("coinbase native balance (18 dec)", cb.balance);
         try usdc.balanceOf(cb) returns (uint256 b) {
             console2.log("coinbase USDC.balanceOf (6 dec)", b);
         } catch (bytes memory err) {
-            console2.log("coinbase USDC.balanceOf reverted, bytes:", err.length);
+            console2.log("coinbase USDC.balanceOf reverted; revert bytes:", err.length);
             console2.logBytes(err);
         }
+    }
 
+    function _fundPayer(address payer) internal returns (bool) {
         vm.deal(payer, 30 ether); // 30 USDC in native 18-decimal units
         console2.log("payer native balance after vm.deal", payer.balance);
         uint256 bal;
@@ -81,26 +90,39 @@ contract ArcForkTest is Test {
         } catch (bytes memory err) {
             console2.log("RESULT: USDC.balanceOf(payer) reverted on the fork; native<->ERC-20 link not emulated");
             console2.logBytes(err);
-            return;
+            return false;
         }
         if (bal != 30e6) {
             console2.log("RESULT: vm.deal did not fund the ERC-20 view (expected 30000000). Flows not run on fork.");
-            return;
+            return false;
         }
         console2.log("RESULT: vm.deal funds the ERC-20 view; running flows against the real USDC");
+        return true;
+    }
 
-        PaidThrough pt = new PaidThrough(ARC_USDC, MAX_AMOUNT);
-
-        // Flow 1: issue -> payWithAuthorization (real domain) -> claim.
-        vm.prank(payee);
-        uint256 a = pt.issue(AMOUNT, uint64(block.timestamp + 1 days), 1 days, payer, keccak256("arc-fork-a"));
-        uint256 validBefore = block.timestamp + 1 hours;
+    function _authSig(PaidThrough pt, address payer, uint256 billId, uint256 validBefore)
+        internal
+        view
+        returns (uint8, bytes32, bytes32)
+    {
         bytes32 structHash = keccak256(
-            abi.encode(RECEIVE_TYPEHASH, payer, address(pt), uint256(AMOUNT), uint256(0), validBefore, pt.authNonce(a))
+            abi.encode(
+                RECEIVE_TYPEHASH, payer, address(pt), uint256(AMOUNT), uint256(0), validBefore, pt.authNonce(billId)
+            )
         );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", usdc.DOMAIN_SEPARATOR(), structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(PAYER_PK, digest);
-        try pt.payWithAuthorization(a, payer, 0, validBefore, v, r, s) {
+        return vm.sign(PAYER_PK, digest);
+    }
+
+    /// @dev Flow 1: issue -> payWithAuthorization (real domain, relayer submits) -> claim.
+    function _flowAuthPayThenClaim(PaidThrough pt, address payer) internal {
+        address payee = makeAddr("arc-payee");
+        vm.prank(payee);
+        uint256 id = pt.issue(AMOUNT, uint64(block.timestamp + 1 days), 1 days, payer, keccak256("arc-fork-a"));
+        uint256 validBefore = block.timestamp + 1 hours;
+        (uint8 v, bytes32 r, bytes32 s) = _authSig(pt, payer, id, validBefore);
+        vm.prank(makeAddr("arc-relayer"));
+        try pt.payWithAuthorization(id, payer, 0, validBefore, v, r, s) {
             console2.log("payWithAuthorization on real USDC: ok");
         } catch (bytes memory err) {
             console2.log("payWithAuthorization on real USDC reverted:");
@@ -108,25 +130,27 @@ contract ArcForkTest is Test {
             revert("payWithAuthorization failed on fork");
         }
         assertEq(usdc.balanceOf(address(pt)), AMOUNT);
-        assertTrue(usdc.authorizationState(payer, pt.authNonce(a)));
+        assertTrue(usdc.authorizationState(payer, pt.authNonce(id)));
         vm.prank(payee);
-        pt.claim(a);
+        pt.claim(id);
         assertEq(usdc.balanceOf(payee), AMOUNT);
         assertEq(usdc.balanceOf(address(pt)), 0);
         console2.log("flow 1 (auth pay -> claim) ok; payer USDC left", usdc.balanceOf(payer));
+    }
 
-        // Flow 2: issue -> approve + pay -> warp past claimBy -> refund by a third party.
-        vm.prank(payee);
-        uint256 b2 = pt.issue(AMOUNT, uint64(block.timestamp + 1 days), 1 hours, address(0), keccak256("arc-fork-b"));
+    /// @dev Flow 2: issue -> approve + pay -> warp to claimBy -> refund by a third party.
+    function _flowPayThenRefund(PaidThrough pt, address payer) internal {
+        vm.prank(makeAddr("arc-payee"));
+        uint256 id = pt.issue(AMOUNT, uint64(block.timestamp + 1 days), 1 hours, address(0), keccak256("arc-fork-b"));
         uint256 payerBefore = usdc.balanceOf(payer);
         vm.startPrank(payer);
         usdc.approve(address(pt), AMOUNT);
-        pt.pay(b2);
+        pt.pay(id);
         vm.stopPrank();
         assertEq(usdc.balanceOf(payer), payerBefore - AMOUNT);
-        vm.warp(pt.getBill(b2).claimBy);
+        vm.warp(pt.getBill(id).claimBy);
         vm.prank(makeAddr("arc-keeper"));
-        pt.refund(b2);
+        pt.refund(id);
         assertEq(usdc.balanceOf(payer), payerBefore);
         assertEq(usdc.balanceOf(address(pt)), 0);
         console2.log("flow 2 (pay -> refund) ok");

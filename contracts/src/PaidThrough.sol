@@ -142,7 +142,7 @@ contract PaidThrough {
     ) external {
         uint96 amount = _markPaid(billId, payer);
         uint256 balanceBefore = usdc.balanceOf(address(this));
-        usdc.receiveWithAuthorization(payer, address(this), amount, validAfter, validBefore, authNonce(billId), v, r, s);
+        _receiveWithAuthorization(payer, amount, validAfter, validBefore, authNonce(billId), v, r, s);
         _checkReceived(balanceBefore, amount);
     }
 
@@ -212,6 +212,20 @@ contract PaidThrough {
         b.status = Status.Paid;
         emit BillPaid(billId, payer, claimBy);
         return b.amount;
+    }
+
+    /// @dev Pulls `amount` from `payer` with the signed authorization (split out to keep the stack shallow).
+    function _receiveWithAuthorization(
+        address payer,
+        uint96 amount,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) private {
+        usdc.receiveWithAuthorization(payer, address(this), amount, validAfter, validBefore, nonce, v, r, s);
     }
 
     /// @dev The contract's USDC balance must have risen by exactly `amount`.
