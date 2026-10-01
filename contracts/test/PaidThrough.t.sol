@@ -509,7 +509,9 @@ contract PaidThroughTest is PaidThroughBase {
     function test_native_callWithValueToIssueReverts() public {
         vm.deal(address(this), 1 ether);
         (bool ok,) = address(pt).call{value: 1}(
-            abi.encodeCall(PaidThrough.issue, (AMOUNT, uint64(block.timestamp) + PAY_WINDOW, CLAIM_WINDOW, address(0), REF))
+            abi.encodeCall(
+                PaidThrough.issue, (AMOUNT, uint64(block.timestamp) + PAY_WINDOW, CLAIM_WINDOW, address(0), REF)
+            )
         );
         assertFalse(ok);
         assertEq(pt.billCount(), 0);

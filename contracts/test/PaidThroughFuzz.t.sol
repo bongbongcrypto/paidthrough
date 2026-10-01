@@ -34,9 +34,13 @@ contract PaidThroughFuzzTest is PaidThroughBase {
 
     // ------------------------------------------------------------------ conservation
 
-    function testFuzz_payThenClaim_conserves(uint96 amount, uint64 payDelay, uint32 claimWindow, uint256 payAt, uint256 claimAt)
-        public
-    {
+    function testFuzz_payThenClaim_conserves(
+        uint96 amount,
+        uint64 payDelay,
+        uint32 claimWindow,
+        uint256 payAt,
+        uint256 claimAt
+    ) public {
         (amount, payDelay, claimWindow) = _bounds(amount, payDelay, claimWindow);
         uint256 id = _issueFuzz(amount, payDelay, claimWindow);
         Snap memory s0 = _snap();

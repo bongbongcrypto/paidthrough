@@ -67,7 +67,9 @@ contract PaidThroughHandler is Test {
         claimWindow = uint32(bound(claimWindow, 1 hours, 30 days));
         address allowed = allowSeed % 3 == 0 ? payers[allowSeed % payers.length] : address(0);
         vm.prank(payee);
-        uint256 id = pt.issue(amount, uint64(ghostNow) + payDelay, claimWindow, allowed, keccak256(abi.encode(ghostNow, amount)));
+        uint256 id = pt.issue(
+            amount, uint64(ghostNow) + payDelay, claimWindow, allowed, keccak256(abi.encode(ghostNow, amount))
+        );
         expectedStatus[id] = PaidThrough.Status.Open;
         calls["issue"]++;
     }

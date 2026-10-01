@@ -95,8 +95,9 @@ contract ArcForkTest is Test {
         vm.prank(payee);
         uint256 a = pt.issue(AMOUNT, uint64(block.timestamp + 1 days), 1 days, payer, keccak256("arc-fork-a"));
         uint256 validBefore = block.timestamp + 1 hours;
-        bytes32 structHash =
-            keccak256(abi.encode(RECEIVE_TYPEHASH, payer, address(pt), uint256(AMOUNT), uint256(0), validBefore, pt.authNonce(a)));
+        bytes32 structHash = keccak256(
+            abi.encode(RECEIVE_TYPEHASH, payer, address(pt), uint256(AMOUNT), uint256(0), validBefore, pt.authNonce(a))
+        );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", usdc.DOMAIN_SEPARATOR(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(PAYER_PK, digest);
         try pt.payWithAuthorization(a, payer, 0, validBefore, v, r, s) {

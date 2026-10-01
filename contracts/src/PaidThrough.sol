@@ -142,9 +142,7 @@ contract PaidThrough {
     ) external {
         uint96 amount = _markPaid(billId, payer);
         uint256 balanceBefore = usdc.balanceOf(address(this));
-        usdc.receiveWithAuthorization(
-            payer, address(this), amount, validAfter, validBefore, authNonce(billId), v, r, s
-        );
+        usdc.receiveWithAuthorization(payer, address(this), amount, validAfter, validBefore, authNonce(billId), v, r, s);
         _checkReceived(balanceBefore, amount);
     }
 
