@@ -34,7 +34,32 @@ Details and the threat model: [`docs/DESIGN.md`](docs/DESIGN.md). Interface of r
 
 ## Why Arc
 
-Arc's own [Request for Builders](https://www.arc.io/blog/the-unfinished-business-of-finance-machine-commerce-and-global-money) asks for "local-market financial platforms" built "for one specific country, corridor, or community". PaidThrough is one corridor (Korea → Philippines first) and one job (a family bill). It leans on what Arc has and a generic chain does not: USDC as gas, so the payer holds one balance; sub-second finality, so the family sees *paid* while still on the phone; and Circle's USDC with EIP-3009 on the chain itself.
+Arc's own [Request for Builders](https://www.arc.io/blog/the-unfinished-business-of-finance-machine-commerce-and-global-money) asks for "local-market financial platforms" built "for one specific country, corridor, or community". PaidThrough is one corridor (Korea → Philippines first) and one job (a family bill).
+
+What Arc changes for this job:
+- **One balance.** Gas is paid in USDC, so a worker who bought USDC on an exchange can pay a bill with nothing else in the wallet. On other chains the same flow needs a second token or a paymaster.
+- **Final in under a second.** Arc's finality is deterministic, so the family page can say *paid* while the payer is still on the phone, with no "wait for confirmations".
+- **Both ends already connect to Arc.** Upbit in Korea supports USDC on Arc since 2026-09-16. Arc's launch post lists Coins.ph and PDAX in the Philippines among the exchanges live on Arc (we have not tested withdrawals at each).
+- **Arc's protocol-level USDC blocklist** is handled and rehearsed on the real node (see below).
+
+One-signature payment uses USDC's EIP-3009, which Circle's USDC also has on other chains; on Arc it means the payer signs once and pays the network fee from the same USDC.
+
+## First users
+
+- **Payer:** a Filipino worker in Korea who already sends money home for a known bill. Buys USDC on Upbit, withdraws it on Arc (fee 0.01 USDC), pays from a phone.
+- **Biller:** a school, tutoring centre or clinic that will publish one Arc address. It needs no integration: it opens the biller desk, issues a bill, sends the link, and collects. To turn USDC into pesos it uses an exchange it can already access.
+- **First proof:** one real bill, end to end on mainnet, with a biller who agreed to take part, plus one bill left uncollected to show the automatic refund. Both transactions will be linked here.
+- **Hardest part, stated plainly:** getting billers to hold an Arc address. That is the work the next steps are for.
+
+## Next steps, and what the grant buys
+
+1. **Run it in public.** Mainnet deploy, the keeper on an always-on server, the page on a public URL. Keeper gas for a year at today's fee (0.0013 USDC per refund) is a few USDC.
+2. **One pilot biller.** Onboard one biller in the Korea → Philippines corridor, publish the transactions, and write a one-page biller guide in English and Filipino.
+3. **Verified biller addresses.** Let a biller publish its address at a web address it controls (e.g. `/.well-known/paidthrough.json` on the school's domain); the bill page then shows "address published by <domain>". This closes the look-alike-bill risk described under Limits.
+4. **Native review** of the Filipino copy (currently a machine draft) and the biller guide.
+5. **Later:** installments and multi-payer bills, which need contract changes and a new deployment.
+
+Proposed use of 500 USDC: about 50 for gas and test bills, about 150 for paid native-speaker review and the biller guide, about 300 as a public bug bounty on the contract before amounts grow.
 
 ## How we know it works
 
@@ -61,7 +86,7 @@ The negative steps include a signature for one bill replayed on another, the sam
 | Path | What |
 |---|---|
 | `contracts/` | `PaidThrough.sol` (5,009-byte runtime, no libraries) and its Foundry tests |
-| `keeper/` | Python refund keeper: dry-run by default, can only ever call `refund`, largest bills first |
+| `keeper/` | Python refund keeper: runs every 5 minutes, can only ever call `refund` (which pays the original payer), largest bills first; simulates each refund before sending, stops on a stuck transaction, alerts on failure; survives log spam (68 tests) |
 | `web/` | Static page: bill status for family, pay, biller desk; English, Filipino (draft translation), Korean |
 | `scripts/probe_usdc.py` | Read-only check of the Arc USDC interface this relies on |
 | `scripts/rehearse_mainnet.py` | The real-node rehearsal above |
@@ -79,6 +104,6 @@ Contracts build and test in GitHub Actions (`.github/workflows/ci.yml`).
 
 ## Limits
 
-Unaudited. A blocklisted payee cannot collect (the payer is refunded after the deadline); a blocklisted payer's refund waits until the block is lifted. Tokens sent to the contract outside `pay` are stuck. The contract proves the biller's address collected the money, not that the school credited the student. No partial payments or installments yet.
+Unaudited. A blocklisted payee can neither collect nor decline (the payer is refunded after the deadline); a blocklisted payer's refund waits until the block is lifted. A payer whose address has code (an EIP-7702 delegation or a smart account) can sign only if that wallet implements ERC-1271; otherwise the page switches to approve + pay. Tokens sent to the contract outside `pay` are stuck. The contract proves the biller's address collected the money, not that the school credited the student, and the page cannot yet prove an address belongs to a school (next step 3). If the keeper is down, any refund can still be triggered from the bill page by anyone. No partial payments or installments yet.
 
 Independent project. Not affiliated with Circle or Arc.
