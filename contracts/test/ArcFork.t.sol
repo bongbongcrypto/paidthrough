@@ -154,6 +154,7 @@ contract ArcForkTest is Test {
             console2.log("FINDING: anvil does not implement Arc's native USDC transfer precompile at 0x1800..00;");
             console2.log("         installing a cheatcode stub on the local fork only and retrying");
             vm.etch(NATIVE_TRANSFER_PRECOMPILE, type(NativeTransferStub).runtimeCode);
+            vm.allowCheatcodes(NATIVE_TRANSFER_PRECOMPILE);
             paid = _tryAuthPay(pt, id, payer, validBefore, v, r, s);
         }
         assertTrue(paid, "payWithAuthorization on real USDC");
