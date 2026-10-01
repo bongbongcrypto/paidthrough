@@ -5,10 +5,14 @@ libs = ["lib"]
 test = "test"
 script = "script"
 solc = "0.8.30"
+# Cancun opcodes (TSTORE/TLOAD/MCOPY) confirmed on the real Arc mainnet node with a read-only creation eth_call
+# (2026-10-01). solc may emit MCOPY for this target; scripts/rehearse_mainnet.py runs the real bytecode there.
 evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
 remappings = ["forge-std/=lib/forge-std/src/"]
+# scripts/rehearse_mainnet.py reads the storage layout from the artifact to build state overrides.
+extra_output = ["storageLayout"]
 
 [fuzz]
 runs = 1000

@@ -85,6 +85,50 @@ jobs:
       - name: Arc mainnet fork test
         run: forge test --match-contract ArcFork -vvv
 
+  arc-rehearsal:
+    # Read-only rehearsal on the real Arc mainnet node: eth_call / eth_estimateGas with state overrides.
+    needs: test
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      ARC_RPC_URL: https://rpc.mainnet.arc.io
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - name: Install forge-std (pinned)
+        working-directory: contracts
+        run: forge install "foundry-rs/forge-std@${FORGE_STD_TAG}" --no-git
+      - name: Build
+        working-directory: contracts
+        run: forge build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contracts-out
+          path: |
+            contracts/out/PaidThrough.sol/PaidThrough.json
+            contracts/out/RehearsalProbe.sol/RehearsalProbe.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install rehearsal deps
+        run: pip install eth-account==0.13.7 eth-abi pycryptodome
+      - name: Rehearse every path on Arc mainnet (read-only)
+        run: python scripts/rehearse_mainnet.py --out contracts/out --markdown rehearsal.md --json rehearsal.json
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f rehearsal.md ]; then cat rehearsal.md >> "$GITHUB_STEP_SUMMARY"; else echo "rehearsal produced no table" >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arc-rehearsal
+          path: |
+            rehearsal.md
+            rehearsal.json
+          if-no-files-found: warn
+
   keeper:
     runs-on: ubuntu-latest
     steps:
