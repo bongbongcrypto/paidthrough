@@ -323,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         return bait(facts, doc_paths)
     report, problems = check(facts, {p.name: p.read_text(encoding="utf-8") for p in doc_paths})
     print("\n".join(report))
-    if not truth.get("deploy_address"):
+    if "deploy_address" not in registered:
         print(f"(not deployed: keeper/deployments.json has no {a.network} entry; address/txHash not checked)")
     for k in unregistered:
         problems.append(f"{k}: no source of truth found")

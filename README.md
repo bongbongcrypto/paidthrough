@@ -4,7 +4,7 @@
 
 A worker in Seoul pays her son's tuition in Cebu. Today the money goes to a relative or through a bank transfer, and she finds out weeks later whether it reached the school. With PaidThrough the school issues a bill on Arc, she pays that bill from her phone with one signature, and her family can open a link and see it settle in about a second: *waiting for the school*, then *collected*. If the school never collects it by the deadline, the money goes back to her wallet automatically. Nobody in the middle can hold it, redirect it or take a cut.
 
-> Status: private build, not yet deployed. Mainnet address and live link will be added here. <!-- TODO(deploy) -->
+> **Live on Arc mainnet.** Contract [`0x05cf14cB82660942c272EaaD488C745490CB82aB`](https://explorer.arc.io/address/0x05cf14cB82660942c272EaaD488C745490CB82aB), deployed 2026-10-01 17:44 UTC in transaction [`0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a`](https://explorer.arc.io/tx/0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a) (block 23,746,519). The deployed runtime code was checked byte for byte against the CI build. Live page and the first real bills will be linked here. <!-- TODO(live): page URL and bill transactions -->
 
 ## The problem
 
@@ -70,7 +70,7 @@ Proposed use of 500 USDC: about 50 for gas and test bills, about 150 for paid na
 
 | Step | Gas (`eth_estimateGas`) | Cost at the 20 gwei base fee |
 |---|---|---|
-| deploy | 1,147,368 | 0.0229 USDC |
+| deploy | 1,147,368 (the real deploy used 1,137,176) | 0.0229 USDC (real: 0.0227 USDC) |
 | issue a bill | 122,021 – 139,189 | 0.0024 – 0.0028 USDC |
 | pay with one signature | 111,862 | 0.0022 USDC, one transaction |
 | approve + pay | 56,253 + 74,601 | 0.0026 USDC, two transactions |
@@ -103,7 +103,7 @@ pip install -r requirements.txt
 python scripts/probe_usdc.py
 python -m unittest discover -s keeper/tests
 python -m unittest discover -s scripts/tests
-python keeper/paidthrough_keeper.py scan --network testnet
+python keeper/paidthrough_keeper.py scan --network mainnet
 python -m http.server 8761 --directory web
 ```
 

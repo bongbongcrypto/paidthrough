@@ -15,8 +15,8 @@ export const CONFIG = {
       // Blockscout explorer listed on docs.arc.io "Connect to Arc" (checked 2026-10-01; /tx/<hash> returns 200).
       explorer: 'https://explorer.arc.io',
       usdc: '0x3600000000000000000000000000000000000000',
-      paidThrough: null, // set after deploy
-      deployBlock: null, // block of the deploy tx; the biller's list scans logs from here
+      paidThrough: '0x05cf14cB82660942c272EaaD488C745490CB82aB', // set after deploy
+      deployBlock: 23746519, // block of the deploy tx; the biller's list scans logs from here
     },
     testnet: {
       label: 'Arc testnet',

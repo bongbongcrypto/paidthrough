@@ -1,1 +1,8 @@
-{"mainnet": null, "testnet": null}
+{
+  "mainnet": {
+    "address": "0x05cf14cB82660942c272EaaD488C745490CB82aB",
+    "fromBlock": 23746519,
+    "txHash": "0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a"
+  },
+  "testnet": null
+}
