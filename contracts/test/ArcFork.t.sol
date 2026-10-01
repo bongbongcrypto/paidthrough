@@ -143,15 +143,10 @@ contract ArcForkTest is Test {
         console2.log("flow 1 (auth pay -> claim) ok; payer USDC left", usdc.balanceOf(payer));
     }
 
-    function _tryAuthPay(
-        PaidThrough pt,
-        uint256 id,
-        address payer,
-        uint256 validBefore,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) internal returns (bool) {
+    function _tryAuthPay(PaidThrough pt, uint256 id, address payer, uint256 validBefore, uint8 v, bytes32 r, bytes32 s)
+        internal
+        returns (bool)
+    {
         vm.prank(makeAddr("arc-relayer"));
         try pt.payWithAuthorization(id, payer, 0, validBefore, v, r, s) {
             console2.log("payWithAuthorization on real USDC: ok");
