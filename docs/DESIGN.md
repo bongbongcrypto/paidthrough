@@ -55,16 +55,16 @@ There is no other way for money to leave the contract. Nobody, including whoever
 | Native gas balance is 18 decimals, USDC ERC-20 view is 6 | contract works only in 6-decimal units; page and keeper convert gas (`/1e18`) and amounts (`/1e6`) separately; fuzz test for the 10¹² mistake |
 | Base fee floor 20 gwei; lower tx dropped silently | keeper sets `maxFeePerGas >= max(2 × baseFee, 20 gwei)` |
 | Native value sent to a contract also shows up as USDC | no payable function, no `receive`/`fallback` |
-| USDC blocklist (FiatToken) | push transfers revert for a blocked recipient; bill stays `Paid` (see limits) |
+| USDC blocklist (Arc checks sender, recipient and transaction sender through a precompile) | any revert leaves the bill `Paid`; refund stays open to every unblocked address (see limits) |
+| Addresses with code (EIP-7702 delegations, smart accounts) sign through ERC-1271 | page checks `eth_getCode(payer)` and falls back to approve + pay |
 | Everything public | reference fingerprints; page warns at issue time |
 
 ## Known limits
 
 - **Unaudited.** Tests and reviews are listed in the README; no external audit.
-- **Blocklisted recipients.** If the payee is blocked, it cannot claim; after `claimBy` the payer is refunded. If the payer is blocked, the refund reverts and waits until the block is lifted; if the block is permanent, the money stays frozen in the contract, which is what the token's own freeze would do to it anyway. There is no pull fallback.
+- **Blocklisted addresses** (checked on the real Arc node, `status/rehearsal-2026-10-01.md` steps 23-37, including a really blocklisted mainnet address). Arc's USDC rejects a transfer with "Blocked address" when the sender, the recipient, or the address that sends the transaction is blocklisted. So a blocked payee can neither claim nor decline, and after `claimBy` any unblocked address refunds the payer. A blocked payer cannot pay; if a payer is blocked after paying, the refund reverts and waits until the block is lifted, and if it is permanent the money stays frozen in the contract, as the token would freeze it anyway. The keeper's own address must not be blocked. There is no pull fallback.
 - **Smart-wallet payers.** Arc's USDC checks signatures from an address that has code (an EIP-7702 delegated wallet or a smart account) through ERC-1271. Such a payer can sign only if its wallet implements ERC-1271; otherwise the page uses approve + pay. Found by the fork test: small public test keys on Arc mainnet already carry sweeper delegations.
 - **A payer can burn the signature path for a bill.** Arc's USDC has `cancelAuthorization`; a payer who cancels `authNonce(billId)` can no longer pay that bill by signature. Approve + pay still works. Only the payer can do this to their own nonce.
-- **Unverified on Arc: blocklisted senders.** Tests assume a blocklisted payee can still send a `decline`. Arc's protocol-level blocklist may stop such an address from sending at all; then the payer is refunded after `claimBy` as usual.
 - **Open bills can be paid by anyone.** With no `allowedPayer`, a stranger can pay first; the money still goes to the bill, and the intended payer's transaction fails with `WrongStatus`. The biller desk asks for the payer's address when it is known.
 - **Payee identity.** The fingerprint proves the reference text, not who issued the bill. A fake bill with a copied reference is possible until billers publish their addresses (a biller directory is future work). Refund protects against a biller who never collects, not against a dishonest one.
 - **Long holds.** A bill can wait up to 365 days to be paid and then up to 365 days to be collected.

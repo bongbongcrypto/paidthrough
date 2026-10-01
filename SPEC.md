@@ -75,7 +75,7 @@ event BillRefunded(uint256 indexed billId, address indexed payer, uint96 amount,
 Custom errors, one per failed guard (e.g. `NotPayee`, `WrongStatus`, `PayWindowClosed`, `ClaimWindowClosed`, `ClaimWindowOpen`, `NotAllowedPayer`, `BadAmount`, `BadPayBy`, `BadClaimWindow`, `TransferFailed`, `BalanceMismatch`).
 
 ## Reference fingerprint (web and docs)
-`ref = sha256(utf8("paidthrough:v1:" + saltHex + ":" + referenceText))` as bytes32. The salt is 16 random bytes made at issue time. The share link carries text and salt only in the URL fragment (`#/bill/<id>?r=<text>&s=<salt>`), which browsers never send to a server; the page recomputes the hash and shows whether it matches the chain.
+`ref = sha256(utf8("paidthrough:v1:" + saltHex + ":" + referenceText))` as bytes32. The salt is 16 random bytes made at issue time, written as 32 lowercase hex characters with no `0x` (that string is what goes into the hash and the link). The share link carries text and salt only in the URL fragment (`#/bill/<id>?r=<text>&s=<salt>`), which browsers never send to a server; the page recomputes the hash and shows whether it matches the chain.
 
 ## Keeper (`keeper/`, Python 3.11)
 - Rebuilds every bill's status from the contract's events (chunked `eth_getLogs`, chunk halves on a range error), lists bills with `status == Paid && claimBy <= latest block timestamp`, simulates `refund(id)` with `eth_call`, and in `--send` mode sends it.

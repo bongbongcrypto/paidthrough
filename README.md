@@ -36,14 +36,35 @@ Details and the threat model: [`docs/DESIGN.md`](docs/DESIGN.md). Interface of r
 
 Arc's own [Request for Builders](https://www.arc.io/blog/the-unfinished-business-of-finance-machine-commerce-and-global-money) asks for "local-market financial platforms" built "for one specific country, corridor, or community". PaidThrough is one corridor (Korea → Philippines first) and one job (a family bill). It leans on what Arc has and a generic chain does not: USDC as gas, so the payer holds one balance; sub-second finality, so the family sees *paid* while still on the phone; and Circle's USDC with EIP-3009 on the chain itself.
 
+## How we know it works
+
+**Rehearsed on the real Arc mainnet node, before spending anything.** `scripts/rehearse_mainnet.py` runs every path as `eth_call` / `eth_estimateGas` against `rpc.mainnet.arc.io`, with state overrides standing in for the deployed contract and the balances. The money moves through Arc's real USDC and its native-transfer and blocklist precompiles. All 37 steps matched their expected outcome (`status/rehearsal-2026-10-01.md`, block 23,641,690; CI job `arc-rehearsal` reruns it):
+
+| Step | Gas (`eth_estimateGas`) | Cost at the 20 gwei base fee |
+|---|---|---|
+| deploy | 1,147,368 | 0.0229 USDC |
+| issue a bill | 122,021 – 139,189 | 0.0024 – 0.0028 USDC |
+| pay with one signature | 111,850 | 0.0022 USDC, one transaction |
+| approve + pay | 56,253 + 74,601 | 0.0026 USDC, two transactions |
+| collect | 59,722 | 0.0012 USDC |
+| decline | 66,384 | 0.0013 USDC |
+| refund (anyone, at the deadline) | 66,463 | 0.0013 USDC |
+
+The negative steps include a signature for one bill replayed on another, the same signature sent straight to USDC or redirected, collecting one second late, refunding one second early, and payouts to an address that is really blocklisted on Arc mainnet. Each was refused with the exact expected error.
+
+**Tests in CI on every push** ([`ci.yml`](.github/workflows/ci.yml)): 138 contract tests: 65 unit, 32 signature, 26 blocklist, 11 fuzz tests at 1,000 runs each, and 4 invariants over 256 runs × 64 calls with every revert treated as a failure. A fork of Arc mainnet also runs the flows against the real USDC contract code. The keeper has 68 tests.
+
+**Reviewed.** Two independent adversarial reviews (security; spec and test quality) found no way to lose or redirect funds in the contract. They found a keeper denial-of-service through log spam, a phishing risk in how the page showed the biller, and eight test gaps. All are fixed.
+
 ## What is in this repository
 
 | Path | What |
 |---|---|
-| `contracts/` | `PaidThrough.sol` and its Foundry tests (run in CI) <!-- TODO(contracts): test counts, gas --> |
-| `keeper/` | Python refund keeper: dry-run by default, can only call `refund` <!-- TODO(keeper) --> |
-| `web/` | Static page: bill status for family, pay, biller desk; English, Filipino (draft), Korean <!-- TODO(web) --> |
+| `contracts/` | `PaidThrough.sol` (5,009-byte runtime, no libraries) and its Foundry tests |
+| `keeper/` | Python refund keeper: dry-run by default, can only ever call `refund`, largest bills first |
+| `web/` | Static page: bill status for family, pay, biller desk; English, Filipino (draft translation), Korean |
 | `scripts/probe_usdc.py` | Read-only check of the Arc USDC interface this relies on |
+| `scripts/rehearse_mainnet.py` | The real-node rehearsal above |
 
 ## Run it
 
