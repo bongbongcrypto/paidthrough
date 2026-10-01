@@ -31,6 +31,14 @@ contract NativeTransferStub {
     }
 }
 
+/// @notice Local stand-in for Arc's blocklist precompile (0x1800…0001) that FiatToken.transferFrom queries. Fork-only;
+///         reports nobody as blocked (blocklist behaviour itself is covered by the mock-token suite).
+contract BlocklistStub {
+    function isBlocklisted(address) external pure returns (bool) {
+        return false;
+    }
+}
+
 /// @notice Runs only with ARC_RPC_URL set. Forks Arc mainnet and exercises PaidThrough against the real USDC.
 ///         Read-only against the network: nothing is broadcast; all state lives in the local fork.
 contract ArcForkTest is Test {
@@ -42,6 +50,7 @@ contract ArcForkTest is Test {
     uint96 internal constant AMOUNT = 25_500_000; // 25.50 USDC
     uint256 internal constant PAYER_PK = 0xB0B; // public Foundry test key: never holds real funds
     address internal constant NATIVE_TRANSFER_PRECOMPILE = 0x1800000000000000000000000000000000000000;
+    address internal constant BLOCKLIST_PRECOMPILE = 0x1800000000000000000000000000000000000001;
 
     IArcUSDC internal usdc = IArcUSDC(ARC_USDC);
 
@@ -188,17 +197,37 @@ contract ArcForkTest is Test {
     function _flowPayThenRefund(PaidThrough pt, address payer) internal {
         vm.prank(makeAddr("arc-payee"));
         uint256 id = pt.issue(AMOUNT, uint64(block.timestamp + 1 days), 1 hours, address(0), keccak256("arc-fork-b"));
+        vm.deal(payer, 30 ether); // top up to 30 USDC (18-decimal native units)
         uint256 payerBefore = usdc.balanceOf(payer);
-        vm.startPrank(payer);
+        assertEq(payerBefore, 30e6);
+        vm.prank(payer);
         usdc.approve(address(pt), AMOUNT);
-        pt.pay(id);
-        vm.stopPrank();
+        if (!_tryPay(pt, id, payer)) {
+            console2.log("blocklist precompile code length", BLOCKLIST_PRECOMPILE.code.length);
+            console2.log("FINDING: real USDC transferFrom asks a blocklist precompile at 0x1800..01 that anvil lacks;");
+            console2.log("         installing a stub that reports nobody blocked (local fork only) and retrying");
+            vm.etch(BLOCKLIST_PRECOMPILE, type(BlocklistStub).runtimeCode);
+            assertTrue(_tryPay(pt, id, payer), "pay on real USDC");
+        }
         assertEq(usdc.balanceOf(payer), payerBefore - AMOUNT);
+        assertEq(usdc.allowance(payer, address(pt)), 0, "approval fully used");
         vm.warp(pt.getBill(id).claimBy);
         vm.prank(makeAddr("arc-keeper"));
         pt.refund(id);
         assertEq(usdc.balanceOf(payer), payerBefore);
         assertEq(usdc.balanceOf(address(pt)), 0);
         console2.log("flow 2 (pay -> refund) ok");
+    }
+
+    function _tryPay(PaidThrough pt, uint256 id, address payer) internal returns (bool) {
+        vm.prank(payer);
+        try pt.pay(id) {
+            console2.log("pay on real USDC: ok");
+            return true;
+        } catch (bytes memory err) {
+            console2.log("pay on real USDC reverted:");
+            console2.logBytes(err);
+            return false;
+        }
     }
 }
