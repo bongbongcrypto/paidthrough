@@ -2,6 +2,7 @@
 pragma solidity 0.8.30;
 
 import {Test} from "forge-std/Test.sol";
+import {console2} from "forge-std/console2.sol";
 import {PaidThrough} from "../src/PaidThrough.sol";
 import {MockFiatToken} from "./mocks/MockFiatToken.sol";
 
@@ -248,6 +249,55 @@ contract PaidThroughInvariantTest is Test {
         selectors[8] = PaidThroughHandler.attemptBadCalls.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
+    }
+
+    /// The handler's actions really change state (guards against a vacuous invariant run).
+    function test_handlerActionsAreLive() public {
+        handler.issue(0, 25_500_000, 1 days, 1 hours, 1); // bill 1, open to anyone
+        handler.pay(1, 0);
+        handler.issue(1, 7_000_000, 1 days, 1 hours, 1); // bill 2
+        handler.payWithAuthorization(2, 1, 0);
+        handler.claim(1);
+        handler.decline(2);
+        handler.issue(2, 1, 1 days, 1 hours, 1); // bill 3
+        handler.cancel(3);
+        handler.issue(0, MAX_AMOUNT, 1 days, 1 hours, 1); // bill 4
+        handler.pay(4, 2);
+        handler.warp(2 hours);
+        handler.refund(4, 0);
+        handler.attemptBadCalls(1, 0);
+
+        assertEq(handler.callCount("issue"), 4);
+        assertEq(handler.callCount("pay"), 2);
+        assertEq(handler.callCount("payWithAuthorization"), 1);
+        assertEq(handler.callCount("claim"), 1);
+        assertEq(handler.callCount("decline"), 1);
+        assertEq(handler.callCount("cancel"), 1);
+        assertEq(handler.callCount("refund"), 1);
+        assertEq(handler.callCount("unexpected"), 0);
+        assertEq(uint8(pt.getBill(1).status), uint8(PaidThrough.Status.Claimed));
+        assertEq(uint8(pt.getBill(2).status), uint8(PaidThrough.Status.Declined));
+        assertEq(uint8(pt.getBill(3).status), uint8(PaidThrough.Status.Cancelled));
+        assertEq(uint8(pt.getBill(4).status), uint8(PaidThrough.Status.Refunded));
+        assertEq(handler.ghostTotalIn(), 25_500_000 + 7_000_000 + MAX_AMOUNT);
+        assertEq(handler.ghostTotalOut(), handler.ghostTotalIn());
+        assertEq(usdc.balanceOf(address(pt)), 0);
+        invariant_balanceEqualsSumOfPaid();
+        invariant_inEqualsOutPlusHeld();
+        invariant_statusMatchesGhost_terminalNeverChanges();
+        invariant_paidBillsWellFormed();
+    }
+
+    /// Logs what the last run actually did (successful state changes, not just handler calls).
+    function afterInvariant() public view {
+        console2.log("last run: bills issued", handler.callCount("issue"));
+        console2.log("last run: paid via pay", handler.callCount("pay"));
+        console2.log("last run: paid via payWithAuthorization", handler.callCount("payWithAuthorization"));
+        console2.log("last run: claimed", handler.callCount("claim"));
+        console2.log("last run: declined", handler.callCount("decline"));
+        console2.log("last run: refunded", handler.callCount("refund"));
+        console2.log("last run: cancelled", handler.callCount("cancel"));
+        console2.log("last run: USDC held (base units)", usdc.balanceOf(address(pt)));
     }
 
     /// Token balance of the contract equals the sum of amounts over Paid bills (no stray tokens in this run).

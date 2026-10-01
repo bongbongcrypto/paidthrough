@@ -59,7 +59,7 @@ jobs:
         run: forge test -vvv
       - name: Gas report
         run: |
-          forge test --gas-report --no-match-contract "Invariant|ArcFork" > gas-report.txt
+          forge test --gas-report --no-match-contract "Invariant|ArcFork" | tee gas-report.txt
           {
             echo "## Gas report (unit, auth, blocklist, fuzz suites)"
             echo '```'
