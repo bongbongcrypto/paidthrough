@@ -28,11 +28,11 @@ function pickLang() {
   return 'en';
 }
 
-function setLang(code) {
+function setLang(code, fromId) {
   if (!LANGS.some((l) => l.code === code) || code === lang) return;
   lang = code;
   try { localStorage.setItem('pt.lang', code); } catch { /* not remembered, still switches */ }
-  route({ keepFocus: true });
+  route({ keepFocus: true, focusId: fromId }); // focus returns to the select the visitor used
 }
 
 const locale = () => LANGS.find((l) => l.code === lang).locale;
@@ -502,7 +502,31 @@ function decodeErrorString(data) {
   } catch { return ''; }
 }
 
-function explain(e) {
+// USDC (FiatToken) revert strings in plain words. ctx = { action: 'pay'|'claim'|'decline'|'refund'|'cancel', bill }.
+function explainTokenString(s, ctx = {}) {
+  if (/blacklist|blocked/i.test(s)) {
+    const date = ctx.bill?.claimBy ? fmtDate(ctx.bill.claimBy) : '';
+    if (ctx.action === 'claim') return t('err.blockedClaim', { date });
+    if (ctx.action === 'pay') return t('err.blockedPay');
+    if (ctx.action === 'refund' || ctx.action === 'decline') return t('err.blockedRefund');
+    return t('err.blocked');
+  }
+  if (/invalid signature/i.test(s)) return t('err.badSig');
+  if (/expired/i.test(s)) return t('err.sigExpired');
+  if (/exceeds balance/i.test(s)) return t('err.noFunds');
+  if (/exceeds allowance/i.test(s)) return t('err.noAllowance');
+  return t('err.token', { msg: s });
+}
+
+// Error text, plus a link to the transaction on the explorer when one was sent (timeouts, failed receipts).
+function showError(el, e, ctx) {
+  el.classList.add('msg--bad');
+  el.replaceChildren(explain(e, ctx));
+  const hash = e?.data?.hash;
+  if (hash) el.append(' ', h('a', { href: `${net.explorer}/tx/${hash}`, target: '_blank', rel: 'noopener' }, t('pay.viewTx')));
+}
+
+function explain(e, ctx) {
   const code = codeOf(e);
   if (code === 4001 || code === 'ACTION_REJECTED') return t('err.rejected');
   if (code === 'NETWORK') return t('err.network');
@@ -517,7 +541,7 @@ function explain(e) {
   if (data) {
     const sel = data.slice(0, 10).toLowerCase();
     if (ERR[sel]) return t('err.' + ERR[sel]);
-    if (sel === ERROR_STRING) return t('err.token', { msg: decodeErrorString(data) });
+    if (sel === ERROR_STRING) return explainTokenString(decodeErrorString(data), ctx);
   }
   const msg = String(e?.message || e || '').slice(0, 160);
   return t('err.generic', { msg });
@@ -559,9 +583,7 @@ function fullAddrEl(addr, { copyable } = {}) {
 function paperEl(bill, { phase, refCheck, example, land, you } = {}) {
   const paidAt = bill.claimBy ? bill.claimBy - bill.claimWindow : 0;
   const rows = [
-    ['bill.biller', h('span', null,
-      fullAddrEl(bill.payee, { copyable: !example }),
-      you && phase === 'open' ? h('span', { class: 'row-sub row-sub--check' }, t('pay.checkBiller')) : null)],
+    ['bill.biller', fullAddrEl(bill.payee, { copyable: !example })],
     ['bill.payBy', fmtDate(bill.payBy)],
   ];
   if (!isZero(bill.allowedPayer)) rows.push(['bill.onlyPayer', h('span', { class: 'mono' }, short(bill.allowedPayer))]);
@@ -580,7 +602,7 @@ function paperEl(bill, { phase, refCheck, example, land, you } = {}) {
       bad: h('p', { class: 'ref-check ref-check--bad' }, t('bill.refBad')),
       unchecked: h('p', { class: 'ref-check' }, t('bill.refUnchecked')),
     }[rc.state];
-    refBlock = [h('p', { class: 'ref-text' }, rc.text), note];
+    refBlock = [h('p', { class: 'ref-text' + (rc.state === 'bad' ? ' ref-text--bad' : '') }, rc.text), note];
   } else {
     refBlock = [h('p', { class: 'ref-text ref-text--none' }, t('bill.refNone'))];
   }
@@ -627,10 +649,11 @@ function deadlineEl(bill, phase, now) {
   return null;
 }
 
-function statusCopy(bill, phase, { you } = {}) {
+// you: the connected wallet is this bill's payer (from the chain). payView: the page is the payment page.
+function statusCopy(bill, phase, { you, payView } = {}) {
   const amount = fmtUnits(bill.amount);
   const map = {
-    open: ['st.open.title', you ? 'st.open.bodyYou' : 'st.open.body', { date: fmtDate(bill.payBy) }],
+    open: ['st.open.title', payView ? 'st.open.bodyYou' : 'st.open.body', { date: fmtDate(bill.payBy) }],
     expired: ['st.expired.title', 'st.expired.body', { date: fmtDate(bill.payBy) }],
     paid: ['st.paid.title', you ? 'st.paid.bodyYou' : 'st.paid.body', { date: fmtDate(bill.claimBy) }],
     refundDue: ['st.refundDue.title', 'st.refundDue.body', { date: fmtDate(bill.claimBy) }],
@@ -707,7 +730,7 @@ function exampleCard(initial = 'paid', { onState } = {}) {
 /* ------------------------------------------------------------------ chrome: header, banner, footer */
 
 function langSelect(id) {
-  const sel = h('select', { id, class: 'lang-select', onchange: (e) => setLang(e.target.value) },
+  const sel = h('select', { id, class: 'lang-select', onchange: (e) => setLang(e.target.value, id) },
     LANGS.map((l) => h('option', { value: l.code, selected: l.code === lang, lang: l.code }, l.label)));
   return h('div', { class: 'lang' }, h('label', { for: id, class: 'sr-only' }, t('lang.label')), sel);
 }
@@ -751,12 +774,13 @@ function parseRoute() {
   return { name: parts[0] || 'home', id: parts[1], params };
 }
 
-async function route({ keepFocus } = {}) {
+async function route({ keepFocus, focusId } = {}) {
   for (const fn of disposers) { try { fn(); } catch { /* ignore */ } }
   disposers = [];
   const seq = ++viewSeq;
   const r = parseRoute();
   document.documentElement.lang = lang;
+  document.title = TITLES[r.name] ? `${t(TITLES[r.name])} · PaidThrough` : 'PaidThrough'; // bill views refine it
   const main = chrome(r);
   const view = VIEWS[r.name] || viewMissing;
   const alive = () => seq === viewSeq;
@@ -765,6 +789,7 @@ async function route({ keepFocus } = {}) {
   } catch (e) {
     if (alive()) main.replaceChildren(h('div', { class: 'wrap narrow' }, h('h1', { class: 'h-view' }, t('err.title')), h('p', { class: 'lede' }, explain(e))));
   }
+  if (alive() && focusId) document.getElementById(focusId)?.focus();
   if (alive() && !keepFocus && navigated) main.focus({ preventScroll: false });
   if (!keepFocus && navigated) window.scrollTo(0, 0);
 }
@@ -839,39 +864,49 @@ async function viewPay(main, r, alive) {
 
 async function billPage(main, r, alive, mode) {
   const id = billIdFrom(r);
-  const you = mode === 'pay';
+  const payView = mode === 'pay';
+  // "You" comes from the chain, never from the route: the connected wallet is the payer only if the bill says so.
+  const isYou = (bill) => !!account && !isZero(bill.payer) && sameAddr(bill.payer, account);
   // Three areas: head (title), panel (the paper), side (actions). Phones stack them in that order.
   const head = h('div', { class: 'bill-head' });
   const panel = h('div', { class: 'desk-panel bill-panel' });
   const side = h('div', { class: 'bill-side' });
-  const eyebrow = () => h('p', { class: 'eyebrow' }, t(you ? 'view.payEyebrow' : 'view.statusEyebrow'));
+  const eyebrow = () => h('p', { class: 'eyebrow' }, t(payView ? 'view.payEyebrow' : 'view.statusEyebrow'));
+  const setTitle = (text) => { document.title = `${t('bill.no', { id: String(id) })}: ${text} · PaidThrough`; };
   main.append(h('div', { class: 'wrap bill-layout' }, head, panel, side));
 
   if (id == null) {
     panel.remove();
     head.append(h('h1', { class: 'h-view' }, t('view.badId')), h('p', { class: 'lede' }, h('a', { href: '#/' }, t('view.home'))));
+    document.title = `${t('view.badId')} · PaidThrough`;
     return;
   }
 
   if (PREVIEW) {
-    const card = exampleCard('paid', {
+    const card = exampleCard(payView ? 'open' : 'paid', {
       onState: (bill, phase) => {
-        const c = statusCopy(bill, phase, { you });
+        const c = statusCopy(bill, phase, { you: false, payView });
         head.replaceChildren(eyebrow(), h('h1', { class: 'h-view' }, c.title), h('p', { class: 'lede' }, c.body));
+        setTitle(c.title);
+        // The preview pay button only appears with the example in its unpaid state.
+        side.replaceChildren(h('p', { class: 'note' }, t('preview.view', { id: String(id) })), ...(payView && phase === 'open' ? [payPanelPreview()] : []));
       },
     });
     panel.append(card);
-    side.append(h('p', { class: 'note' }, t('preview.view', { id: String(id) })));
-    if (you) side.append(payPanelPreview());
     return;
   }
 
   panel.append(skeletonPaper());
   head.append(eyebrow(), h('h1', { class: 'h-view' }, t('view.loading')));
+  setTitle(t('view.loading'));
   let last = null; // { bill, phase }
+  let lastKey = '';
   let refCheck = null;
   let timer = null;
-  const payState = { busy: false, done: null };
+  // busy: a wallet prompt is open; done: this page's own payment receipt; tried: Pay was pressed but the bill
+  // was no longer open; flash: one-off line shown after the next redraw (e.g. a refund that just went through).
+  const payState = { busy: false, done: null, tried: false, flash: null };
+  const billKey = (b) => [b.status, b.payer.toLowerCase(), b.claimBy, b.payBy].join('|');
 
   const actions = h('div', { class: 'status-actions' });
   const meta = h('p', { class: 'status-meta' });
@@ -895,19 +930,24 @@ async function billPage(main, r, alive, mode) {
     if (!bill) {
       panel.remove();
       head.replaceChildren(eyebrow(), h('h1', { class: 'h-view' }, t('view.notFound', { id: String(id), network: net.label })), h('p', { class: 'lede' }, t('view.notFoundBody')));
+      setTitle(t('view.notFoundShort'));
       side.replaceChildren();
       return;
     }
     if (!refCheck) refCheck = await checkRef(bill, r.params);
-    const now = chainNow();
-    const phase = phaseOf(bill, now);
-    const changed = last && last.phase !== phase;
+    if (!alive()) return;
+    // Under a wallet prompt nothing is touched, `last` included, so the next read after the prompt sees the change.
+    if (payState.busy) { schedule(); return; }
+    const phase = phaseOf(bill, chainNow());
+    const key = billKey(bill);
     const first = !last;
+    const phaseChanged = !first && last.phase !== phase;
+    const billChanged = !first && lastKey !== key;
     last = { bill, phase };
-    if (payState.busy) { schedule(); return; } // never redraw under a wallet prompt
-    if (first || changed || land) draw(land || changed);
-    else drawPaper(false); // routine refresh: keep the buttons (and keyboard focus) where they are
-    if (changed) announce(statusCopy(bill, phase, { you }).title);
+    lastKey = key;
+    if (first || phaseChanged || billChanged || land) draw(land || phaseChanged);
+    else drawDeadline(); // nothing changed on chain: keep the paper (and keyboard focus, reading position) as it is
+    if (phaseChanged) announce(statusCopy(bill, phase, { you: isYou(bill), payView }).title);
     schedule();
   }
 
@@ -920,21 +960,31 @@ async function billPage(main, r, alive, mode) {
   document.addEventListener('visibilitychange', onVis);
   onLeave(() => { clearTimeout(timer); document.removeEventListener('visibilitychange', onVis); });
 
-  function drawPaper(land) {
+  const metaText = (phase) => (MOVING.has(phase) ? t('view.auto', { time: fmtDate(chainNow(), { noYear: true, noZone: true }) }) : '');
+
+  function drawDeadline() {
     const { bill, phase } = last;
     const dl = deadlineEl(bill, phase, chainNow());
-    panel.replaceChildren(paperEl(bill, { phase, refCheck, land, you }), ...(dl ? [dl] : []));
-    meta.textContent = MOVING.has(phase) ? t('view.auto', { time: fmtDate(chainNow(), { noYear: true, noZone: true }) }) : '';
+    const old = panel.querySelector('.deadline');
+    if (old && dl) old.replaceWith(dl);
+    else if (old) old.remove();
+    else if (dl) panel.append(dl);
+    meta.textContent = metaText(phase);
   }
 
   function draw(land) {
     const { bill, phase } = last;
-    drawPaper(land);
-    const c = statusCopy(bill, phase, { you });
+    const you = isYou(bill);
+    const dl = deadlineEl(bill, phase, chainNow());
+    panel.replaceChildren(paperEl(bill, { phase, refCheck, land, you }), ...(dl ? [dl] : []));
+    const c = statusCopy(bill, phase, { you, payView });
     head.replaceChildren(eyebrow(), h('h1', { class: 'h-view' }, c.title), h('p', { class: 'lede' }, c.body));
-    meta.textContent = MOVING.has(phase) ? t('view.auto', { time: fmtDate(chainNow(), { noYear: true, noZone: true }) }) : '';
-    actions.replaceChildren(...sideActions(bill, phase));
-    side.replaceChildren(...[actions, refNote(), linksEl(bill), meta].filter(Boolean));
+    setTitle(c.title);
+    meta.textContent = metaText(phase);
+    actions.replaceChildren(...sideActions(bill, phase, you));
+    const flash = payState.flash ? h('p', { class: 'done-line', id: 'flash', tabindex: '-1' }, payState.flash) : null;
+    payState.flash = null;
+    side.replaceChildren(...[flash, actions, refNote(), linksEl(bill), meta].filter(Boolean));
   }
 
   function refNote() {
@@ -944,22 +994,30 @@ async function billPage(main, r, alive, mode) {
     return null;
   }
 
+  const linkRef = () => (refCheck?.text != null && /^[0-9a-f]{32}$/i.test(r.params.get('s') || '') ? { text: refCheck.text, salt: r.params.get('s').toLowerCase() } : null);
+
   function linksEl(bill) {
-    const ref = refCheck?.text != null && /^[0-9a-f]{32}$/i.test(r.params.get('s') || '') ? { text: refCheck.text, salt: r.params.get('s').toLowerCase() } : null;
+    const ref = linkRef();
     const statusUrl = shareLink('bill', bill.id, ref);
     const items = [];
-    if (you && last.phase !== 'open') items.push(h('li', null, h('a', { href: statusUrl.slice(statusUrl.indexOf('#')) }, t('view.toStatus'))));
-    if (!you && last.phase === 'open') items.push(h('li', null, h('a', { href: shareLink('pay', bill.id, ref).replace(/^[^#]*/, '') }, t('view.toPay'))));
+    if (payView && last.phase !== 'open') items.push(h('li', null, h('a', { href: statusUrl.slice(statusUrl.indexOf('#')) }, t('view.toStatus'))));
+    if (!payView && last.phase === 'open') items.push(h('li', null, h('a', { href: shareLink('pay', bill.id, ref).replace(/^[^#]*/, '') }, t('view.toPay'))));
     items.push(h('li', null, h('a', { href: `${net.explorer}/address/${net.paidThrough}`, target: '_blank', rel: 'noopener' }, t('view.explorer'))));
     return h('ul', { class: 'links' }, items);
   }
 
-  function sideActions(bill, phase) {
+  function sideActions(bill, phase, you) {
     if (phase === 'refundDue') return refundBox(bill);
-    if (!you) return [];
-    if (payState.done) return [payDone(bill)];
-    if (phase !== 'open') return [];
-    return [payBox(bill)];
+    if (!payView) return [];
+    if (phase === 'open') return [payBox(bill)];
+    if (you) return [shareBox(bill, payState.done)];
+    // Pay view of a bill this wallet did not pay: say so plainly, and that nothing was taken from it.
+    const byOther = !isZero(bill.payer);
+    if (!byOther && !payState.tried) return [];
+    const text = byOther
+      ? t(payState.tried ? 'pay.takenNotCharged' : 'pay.paidByOther', { addr: short(bill.payer) })
+      : t('pay.closedNotCharged');
+    return [h('div', { class: 'action-box' }, h('p', { class: 'pay-other', id: 'pay-note', tabindex: '-1' }, text))];
   }
 
   function refundBox(bill) {
@@ -967,17 +1025,21 @@ async function billPage(main, r, alive, mode) {
     const btn = h('button', { type: 'button', class: 'btn btn--primary', disabled: !wallet() }, t('view.refundBtn'));
     btn.addEventListener('click', async () => {
       btn.disabled = true;
+      let ok = false;
       try {
         if (!account) await connect(); else await ensureChain();
         const res = await sendTx(net.paidThrough, SEL.refund + encUint(bill.id), (step, info) => {
           msg.textContent = step === 'confirm' ? t('tx.confirm', { fee: info.fee }) : t('tx.wait');
         });
-        msg.textContent = t('view.refundDone', { secs: (res.ms / 1000).toFixed(1) });
-        await load(true);
+        payState.flash = t('view.refundDone', { secs: (res.ms / 1000).toFixed(1) });
+        ok = true;
       } catch (e) {
-        msg.textContent = explain(e);
-        msg.classList.add('msg--bad');
+        showError(msg, e, { action: 'refund', bill });
         btn.disabled = false;
+      }
+      if (ok) {
+        await load(true);
+        document.getElementById('flash')?.focus();
       }
     });
     return [h('div', { class: 'action-box' },
@@ -986,50 +1048,54 @@ async function billPage(main, r, alive, mode) {
       msg)];
   }
 
-  function payDone(bill) {
-    const d = payState.done;
-    const ref = refCheck?.text != null && /^[0-9a-f]{32}$/i.test(r.params.get('s') || '') ? { text: refCheck.text, salt: r.params.get('s').toLowerCase() } : null;
-    const statusUrl = shareLink('bill', bill.id, ref);
+  // After paying (or on a later visit by the wallet that paid): the family link, with what it reveals.
+  function shareBox(bill, d) {
+    const statusUrl = shareLink('bill', bill.id, linkRef());
     const copyBtn = h('button', { type: 'button', class: 'btn btn--quiet', onclick: (e) => copyText(statusUrl, e.currentTarget) }, t('common.copyLink'));
     return h('div', { class: 'action-box action-box--done' },
-      h('p', { class: 'done-line' }, t('pay.done', { secs: (d.ms / 1000).toFixed(1) })),
-      h('p', null, h('a', { href: `${net.explorer}/tx/${d.hash}`, target: '_blank', rel: 'noopener' }, t('pay.viewTx'))),
-      h('p', { class: 'label' }, t('pay.shareFamily')),
-      h('div', { class: 'copy-row' }, h('input', { class: 'input input--link', readonly: true, value: statusUrl, 'aria-label': t('pay.shareFamily') }), copyBtn));
+      d ? h('p', { class: 'done-line', id: 'pay-done', tabindex: '-1' }, t('pay.done', { secs: (d.ms / 1000).toFixed(1) })) : null,
+      d ? h('p', null, h('a', { href: `${net.explorer}/tx/${d.hash}`, target: '_blank', rel: 'noopener' }, t('pay.viewTx'))) : null,
+      h('p', { class: 'label', id: 'share-l' }, t('pay.shareFamily')),
+      h('p', { class: 'pay-public' }, t('pay.public')),
+      h('div', { class: 'copy-row' }, h('input', { class: 'input input--link', readonly: true, value: statusUrl, 'aria-labelledby': 'share-l' }), copyBtn));
   }
 
   function payBox(bill) {
     const box = h('div', { class: 'action-box' });
-    const msg = h('p', { class: 'msg', role: 'status' });
+    const msg = h('p', { class: 'msg', role: 'status', tabindex: '-1' });
     const info = h('div', { class: 'pay-info' });
-    const p = wallet();
+    const amount = fmtUnits(bill.amount);
+    const sum = () => h('p', { class: 'pay-sum' }, t('pay.sum', { amount, fee: feeText(CONFIG.gasHint.payWithAuthorization, baseFee) }));
+    const publicNote = () => h('p', { class: 'pay-public' }, t('pay.public'));
 
-    if (!p) {
-      box.append(h('p', null, t('pay.noWallet')));
+    if (!wallet()) {
+      // Typical case: the link was opened inside a chat app. Give the amount and a way to carry the link over.
+      const here = location.href;
+      box.append(sum(), h('p', null, t('pay.noWallet')),
+        h('button', { type: 'button', class: 'btn btn--primary btn--wide', onclick: (e) => copyText(here, e.currentTarget) }, t('pay.copyThisLink')));
       return box;
     }
     if (!account) {
       const connectBtn = h('button', { type: 'button', class: 'btn btn--primary btn--wide' }, t('pay.connect'));
       connectBtn.addEventListener('click', async () => {
         connectBtn.disabled = true;
-        try { await connect(); draw(false); } catch (err) { msg.textContent = explain(err); msg.classList.add('msg--bad'); connectBtn.disabled = false; }
+        try {
+          await connect();
+          draw(false);
+          document.getElementById('pay-btn')?.focus();
+        } catch (err) { showError(msg, err, { action: 'pay', bill }); connectBtn.disabled = false; }
       });
-      box.append(
-        h('p', { class: 'pay-sum' }, t('pay.sum', { amount: fmtUnits(bill.amount), fee: feeText(CONFIG.gasHint.payWithAuthorization, baseFee) })),
-        connectBtn,
-        h('p', { class: 'hint' }, t('pay.oneSig')),
-        msg);
+      box.append(sum(), publicNote(), connectBtn, h('p', { class: 'hint' }, t('pay.oneSig')), msg);
       return box;
     }
 
-    const amount = fmtUnits(bill.amount);
     const allowedOk = isZero(bill.allowedPayer) || sameAddr(bill.allowedPayer, account);
     // 'sig' = one EIP-3009 signature + one transaction; 'approve' = allowance + pay (two transactions).
     // A payer address with code (smart account, EIP-7702 delegate) gets 'approve': Arc's USDC checks such
     // signatures through ERC-1271, so a plain typed-data signature would be rejected as invalid.
     let mode = 'sig';
     let noFunds = false;
-    const payBtn = h('button', { type: 'button', class: 'btn btn--primary btn--wide', disabled: true }, t('pay.btn', { amount }));
+    const payBtn = h('button', { type: 'button', id: 'pay-btn', class: 'btn btn--primary btn--wide', disabled: !allowedOk }, t('pay.btn', { amount }));
     const how = h('p', { class: 'hint' }, t('pay.oneSig'));
     const altBtn = h('button', { type: 'button', class: 'btn-text', disabled: !allowedOk }, t('pay.fallback'));
     const alt = h('div', { class: 'alt' }, altBtn, h('p', { class: 'hint' }, t('pay.fallbackWhy', { amount })));
@@ -1038,18 +1104,16 @@ async function billPage(main, r, alive, mode) {
     // Neutral, local-only hint: has this browser paid this biller address before? (No claim about the biller.)
     const paidToKey = `pt.paidTo.${net.chainId}`;
     const seenBefore = (store.get(paidToKey) || []).includes(bill.payee.toLowerCase());
-    const firstNote = seenBefore ? null : h('p', { class: 'pay-first' }, t('pay.firstTime'));
 
-    rpc('eth_getCode', [account, 'latest']).catch(() => '0x').then((code) => {
-      if (!alive()) return;
-      if (code && code !== '0x' && !/^0x0*$/.test(code)) {
-        mode = 'approve';
-        payBtn.textContent = t('pay.btn2', { amount });
-        how.textContent = t('pay.smart', { amount });
-        alt.hidden = true;
-        feeLine.textContent = t('pay.fee', { fee: feeText(CONFIG.gasHint.approve + CONFIG.gasHint.pay, baseFee) });
-      }
-      payBtn.disabled = !allowedOk || noFunds;
+    function twoStep(why) {
+      mode = 'approve';
+      payBtn.textContent = t(why === 'finish' ? 'pay.finish' : 'pay.btn2', { amount });
+      how.textContent = t(why === 'finish' ? 'pay.finishHow' : 'pay.smart', { amount });
+      alt.hidden = true;
+      feeLine.textContent = t('pay.fee', { fee: feeText(why === 'finish' ? CONFIG.gasHint.pay : CONFIG.gasHint.approve + CONFIG.gasHint.pay, baseFee) });
+    }
+    const codeReady = rpc('eth_getCode', [account, 'latest']).catch(() => '0x').then((code) => {
+      if (alive() && code && code !== '0x' && !/^0x0*$/.test(code)) twoStep('smart');
     });
 
     usdcBalance(account).then((bal) => {
@@ -1067,43 +1131,80 @@ async function billPage(main, r, alive, mode) {
       msg.textContent = t(k, i || {});
       if (s === 'confirm' && i?.fee) feeLine.textContent = t('pay.feeSigned', { fee: i.fee });
     };
+    const enable = () => {
+      if (!payBtn.isConnected) return;
+      payBtn.disabled = !allowedOk || noFunds;
+      altBtn.disabled = !allowedOk || noFunds;
+    };
 
     async function run(kind) {
       if (payState.busy) return;
       payState.busy = true;
       payBtn.disabled = true; altBtn.disabled = true;
+      let outcome = null; // 'paid' | 'taken' | null (error shown, buttons back on)
+      let drawnFromReceipt = false;
+      let focusAlt = false;
       try {
+        await codeReady;
+        const how2 = kind === 'auto' ? mode : kind;
         await ensureChain();
         const fresh = await readBill(id);
-        if (!fresh || phaseOf(fresh, chainNow()) !== 'open') { await load(true); return; }
-        const res = kind === 'sig' ? await payWithSignature(fresh, step) : await payWithApproval(fresh, step);
-        payState.done = res;
-        store.set(paidToKey, [...new Set([fresh.payee.toLowerCase(), ...(store.get(paidToKey) || [])])].slice(0, 50));
-        // Show the stamp from the receipt at once; the follow-up read confirms it.
-        const paidLog = res.receipt.logs.find((l) => l.topics[0] === TOPIC.BillPaid && sameAddr(l.address, net.paidThrough));
-        if (paidLog) {
-          const claimBy = Number(wUint(words(paidLog.data)[0]));
-          last = { bill: { ...fresh, status: STATUS.Paid, payer: account, claimBy }, phase: 'paid' };
-          draw(true);
-          announce(t('pay.done', { secs: (res.ms / 1000).toFixed(1) }));
+        if (!fresh || phaseOf(fresh, chainNow()) !== 'open') {
+          payState.tried = true;
+          outcome = 'taken';
+        } else {
+          if (how2 === 'approve') how.textContent = t('pay.twoStepHow', { amount });
+          const res = how2 === 'sig' ? await payWithSignature(fresh, step) : await payWithApproval(fresh, step);
+          payState.done = res;
+          store.set(paidToKey, [...new Set([fresh.payee.toLowerCase(), ...(store.get(paidToKey) || [])])].slice(0, 50));
+          // Show the stamp from the receipt at once; the follow-up read confirms it.
+          const paidLog = res.receipt.logs.find((l) => l.topics[0] === TOPIC.BillPaid && sameAddr(l.address, net.paidThrough));
+          if (paidLog) {
+            const claimBy = Number(wUint(words(paidLog.data)[0]));
+            last = { bill: { ...fresh, status: STATUS.Paid, payer: account, claimBy }, phase: 'paid' };
+            lastKey = billKey(last.bill);
+            draw(true);
+            announce(t('pay.done', { secs: (res.ms / 1000).toFixed(1) }));
+            document.getElementById('pay-done')?.focus();
+            drawnFromReceipt = true;
+          }
+          outcome = 'paid';
         }
-        await load(!paidLog);
       } catch (e) {
-        msg.textContent = explain(e);
-        msg.classList.add('msg--bad');
-        payBtn.disabled = !allowedOk || noFunds; altBtn.disabled = !allowedOk || noFunds;
-        if (codeOf(e) === 'NO_SIGN_TYPED') altBtn.focus();
+        if (codeOf(e) === 'APPROVED_NOT_PAID') {
+          // Step 1 (allowance) is on Arc, step 2 (payment) is not. Say exactly that, and make Pay finish it.
+          twoStep('finish');
+          const why = codeOf(e.cause) === 4001 ? '' : explain(e.cause, { action: 'pay', bill }) + ' ';
+          msg.classList.add('msg--bad');
+          msg.textContent = why + t('pay.approvedNotPaid', { amount });
+        } else {
+          showError(msg, e, { action: 'pay', bill });
+        }
+        focusAlt = codeOf(e) === 'NO_SIGN_TYPED';
       } finally {
         payState.busy = false;
+        enable(); // every exit path leaves the buttons usable (or the box replaced)
+      }
+      if (focusAlt) altBtn.focus();
+      else if (outcome === null && payBtn.isConnected) msg.focus();
+      if (outcome) {
+        // After busy is cleared. A receipt-drawn page is only confirmed (no second redraw, focus stays put).
+        await load(!drawnFromReceipt);
+        if (outcome === 'paid' && !drawnFromReceipt) document.getElementById('pay-done')?.focus();
+        if (outcome === 'taken') {
+          const note = document.getElementById('pay-note');
+          if (note) { announce(note.textContent); note.focus(); }
+        }
       }
     }
-    payBtn.addEventListener('click', () => run(mode));
+    payBtn.addEventListener('click', () => run('auto'));
     altBtn.addEventListener('click', () => run('approve'));
 
     const kids = [info];
-    if (firstNote) kids.push(firstNote);
+    if (!seenBefore) kids.push(h('p', { class: 'pay-first' }, t('pay.firstTime')));
+    kids.push(publicNote());
     if (!allowedOk) kids.push(h('p', { class: 'msg msg--bad' }, t('pay.notAllowed', { addr: short(bill.allowedPayer) })));
-    kids.push(payBtn, how, msg, alt);
+    kids.push(h('p', { class: 'pay-check' }, t('pay.checkBiller')), payBtn, how, msg, alt);
     box.append(...kids);
     return box;
   }
@@ -1177,7 +1278,14 @@ async function payWithApproval(bill, step) {
     await sendTx(net.usdc, SEL.approve + encAddr(net.paidThrough) + encUint(bill.amount), (s, i) => step(s === 'confirm' ? 'approve' : s, i));
   }
   step('pay2');
-  return sendTx(net.paidThrough, SEL.pay + encUint(bill.id), (s, i) => step(s === 'confirm' ? 'pay2' : s, i));
+  try {
+    return await sendTx(net.paidThrough, SEL.pay + encUint(bill.id), (s, i) => step(s === 'confirm' ? 'pay2' : s, i));
+  } catch (e) {
+    // A sent-but-unconfirmed or failed payment keeps its own error (with the tx link). Anything else means the
+    // allowance is on Arc but no payment went out, which the page must say instead of "nothing was sent".
+    if (codeOf(e) === 'TIMEOUT' || codeOf(e) === 'REVERTED') throw e;
+    throw Object.assign(new AppError('APPROVED_NOT_PAID', 'allowance set, payment not sent'), { cause: e });
+  }
 }
 
 /* ------------------------------------------------------------------ view: biller desk */
@@ -1306,11 +1414,11 @@ async function viewDesk(main, r, alive) {
           Object.assign(draft, { amount: '', ref: '', only: '' });
           if (!alive()) return;
           drawForm({ id: billId, ref: { text: v.text, salt }, ms: res.ms, hash: res.hash });
+          formCol.querySelector('#issue-h')?.focus();
           announce(t('desk.done', { id: String(billId) }));
           drawList();
         } catch (err) {
-          msg.textContent = explain(err);
-          msg.classList.add('msg--bad');
+          showError(msg, err, { action: 'issue' });
           submit.disabled = false;
           submit.textContent = account ? t('desk.submit') : t('desk.connectFirst');
         }
@@ -1345,8 +1453,9 @@ async function viewDesk(main, r, alive) {
   async function drawList() {
     const head = h('div', { class: 'list-head' }, h('h2', { id: 'mine-h', class: 'h-section' }, t('desk.mine')));
     if (PREVIEW) {
-      listCol.replaceChildren(head, h('p', { class: 'note' }, t('desk.previewList')),
-        h('ul', { class: 'rows' }, ['paid', 'open', 'collected', 'returned'].map((s) => billRow(exampleBill(s), { example: true, ref: { text: EX.text, salt: EX.salt } }))));
+      const ex = ['paid', 'open', 'collected', 'returned'].map((s) => exampleBill(s));
+      listCol.replaceChildren(head, h('p', { class: 'note' }, t('desk.previewList')), needsLine(ex, Math.floor(Date.now() / 1000)),
+        h('ul', { class: 'rows' }, ex.map((b) => billRow(b, { example: true, ref: { text: EX.text, salt: EX.salt } }))));
       return;
     }
     if (!wallet()) { listCol.replaceChildren(head, h('p', { class: 'note' }, t('desk.noWallet'))); return; }
@@ -1375,13 +1484,28 @@ async function viewDesk(main, r, alive) {
     }
     if (!alive()) return;
     if (!bills.length) { listCol.replaceChildren(head, h('p', { class: 'note' }, t('desk.mineEmpty'))); return; }
-    listCol.replaceChildren(head, h('ul', { class: 'rows' }, bills.map((b) => billRow(b, { ref: loadRef(b.id) }))));
+    // Bills waiting to be collected come first, soonest deadline on top; the rest stay newest first.
+    const now = chainNow();
+    const waiting = bills.filter((b) => phaseOf(b, now) === 'paid').sort((a, b) => a.claimBy - b.claimBy);
+    const others = bills.filter((b) => phaseOf(b, now) !== 'paid');
+    listCol.replaceChildren(head, needsLine(bills, now), h('ul', { class: 'rows' }, [...waiting, ...others].map((b) => billRow(b, { ref: loadRef(b.id) }))));
+  }
+
+  // One line that says what needs doing: how many bills to collect, how much, and the nearest deadline.
+  function needsLine(bills, now) {
+    const waiting = bills.filter((b) => phaseOf(b, now) === 'paid').sort((a, b) => a.claimBy - b.claimBy);
+    if (!waiting.length) return h('p', { class: 'needs' }, t('desk.needsNone'));
+    const total = waiting.reduce((sum, b) => sum + b.amount, 0n);
+    const first = waiting[0];
+    return h('p', { class: 'needs needs--on' }, t(waiting.length === 1 ? 'desk.needs1' : 'desk.needsN', {
+      n: String(waiting.length), total: fmtUnits(total), date: fmtDate(first.claimBy, { noZone: true }), time: fmtDuration(first.claimBy - now),
+    }));
   }
 
   function billRow(bill, { example, ref } = {}) {
     const now = example ? Math.floor(Date.now() / 1000) : chainNow();
     const phase = phaseOf(bill, now);
-    const msg = h('p', { class: 'msg', role: 'status' });
+    const msg = h('p', { class: 'msg', role: 'status', tabindex: '-1' });
     const s = STAMP[phase];
     const when = {
       open: t('row.payBy', { date: fmtDate(bill.payBy, { noZone: true }) }),
@@ -1390,7 +1514,7 @@ async function viewDesk(main, r, alive) {
       refundDue: t('row.refundDue'),
     }[phase] || '';
 
-    const act = (labelKey, fn, cls = 'btn--quiet', confirmKey) => {
+    const act = (labelKey, fn, cls = 'btn--quiet', confirmKey, action) => {
       const b = h('button', { type: 'button', class: 'btn btn--sm ' + cls, disabled: example || PREVIEW }, t(labelKey));
       b.addEventListener('click', async () => {
         if (confirmKey && b.dataset.armed !== '1') {
@@ -1409,11 +1533,13 @@ async function viewDesk(main, r, alive) {
           const fresh = await readBill(bill.id);
           const next = billRow(fresh, { ref });
           row.replaceWith(next);
-          next.querySelector('.msg').textContent = t('row.done', { secs: (res.ms / 1000).toFixed(1) });
+          const done = next.querySelector('.msg');
+          done.textContent = t('row.done', { secs: (res.ms / 1000).toFixed(1) });
+          done.focus(); // keyboard and screen-reader position stay on the row that changed
         } catch (e) {
-          msg.textContent = explain(e);
-          msg.classList.add('msg--bad');
+          showError(msg, e, { action, bill });
           for (const x of row.querySelectorAll('button')) x.disabled = false;
+          msg.focus();
         }
       });
       return b;
@@ -1421,19 +1547,37 @@ async function viewDesk(main, r, alive) {
 
     const actions = [];
     if (phase === 'paid') {
-      actions.push(act('row.collect', SEL.claim, 'btn--primary'));
-      actions.push(act('row.decline', SEL.decline, 'btn--quiet', 'row.declineConfirm'));
+      actions.push(act('row.collect', SEL.claim, 'btn--primary', null, 'claim'));
+      actions.push(act('row.decline', SEL.decline, 'btn--quiet', 'row.declineConfirm', 'decline'));
     } else if (phase === 'open' || phase === 'expired') {
-      actions.push(act('row.cancel', SEL.cancel, 'btn--quiet', 'row.cancelConfirm'));
+      actions.push(act('row.cancel', SEL.cancel, 'btn--quiet', 'row.cancelConfirm', 'cancel'));
     } else if (phase === 'refundDue') {
-      actions.push(act('row.refund', SEL.refund, 'btn--quiet'));
+      actions.push(act('row.refund', SEL.refund, 'btn--quiet', null, 'refund'));
     }
 
     const payUrl = shareLink('pay', bill.id, ref);
     const statusHref = example ? '#/bill/' + bill.id : shareLink('bill', bill.id, ref).replace(/^[^#]*/, '');
     const links = [h('a', { href: statusHref, class: 'row-link' }, t('row.view'))];
+    let restoreForm = null;
     if (phase === 'open') {
-      links.push(h('button', { type: 'button', class: 'btn-text', disabled: example, onclick: (e) => copyText(payUrl, e.currentTarget) }, t('row.copyPay')));
+      links.push(h('button', { type: 'button', class: 'btn-text', disabled: example, onclick: (e) => copyText(payUrl, e.currentTarget) }, t(ref ? 'row.copyPay' : 'row.copyPayNoRef')));
+      if (!ref && !example) {
+        restoreForm = restoreEl(bill, (restored) => {
+          const next = billRow(bill, { ref: restored });
+          row.replaceWith(next);
+          const done = next.querySelector('.msg');
+          done.textContent = t('row.restored');
+          done.focus();
+        });
+        links.push(h('button', {
+          type: 'button', class: 'btn-text', 'aria-expanded': 'false',
+          onclick: (e) => {
+            restoreForm.hidden = !restoreForm.hidden;
+            e.currentTarget.setAttribute('aria-expanded', String(!restoreForm.hidden));
+            if (!restoreForm.hidden) restoreForm.querySelector('input').focus();
+          },
+        }, t('row.restore')));
+      }
     }
 
     const row = h('li', { class: 'row', 'data-phase': phase },
@@ -1445,8 +1589,36 @@ async function viewDesk(main, r, alive) {
         h('span', { class: 'chip ' + s.look.split(' ').map((x) => 'stamp--' + x).join(' ') }, t(s.word)),
         h('p', { class: 'row-when' }, when)),
       h('div', { class: 'row-actions' }, actions, h('div', { class: 'row-links' }, links)),
+      restoreForm,
       msg);
     return row;
+  }
+
+  // Rebuild a row's reference from a link the biller saved elsewhere: the link carries text + salt, and the
+  // fingerprint on Arc proves they belong to this bill before anything is stored.
+  function restoreEl(bill, onDone) {
+    const fid = 'restore-' + bill.id;
+    const input = h('input', { id: fid, class: 'input input--link', autocomplete: 'off', spellcheck: 'false', 'aria-describedby': fid + '-err' });
+    const err = h('p', { class: 'field-err', id: fid + '-err', hidden: true });
+    const fail = (key) => { err.textContent = t(key); err.hidden = false; input.setAttribute('aria-invalid', 'true'); input.focus(); };
+    return h('form', {
+      class: 'restore', hidden: true, novalidate: true,
+      onsubmit: async (e) => {
+        e.preventDefault();
+        const m = input.value.trim().match(/#\/(?:pay|bill)\/(\d+)\?(.*)$/);
+        if (!m || m[1] !== String(bill.id)) return fail('row.restoreWrongBill');
+        const q = new URLSearchParams(m[2]);
+        const text = q.get('r');
+        const salt = (q.get('s') || '').toLowerCase();
+        if (text == null || !/^[0-9a-f]{32}$/.test(salt)) return fail('row.restoreNoRef');
+        if (await fingerprint(salt, text) !== bill.ref.toLowerCase()) return fail('row.restoreMismatch');
+        saveRef(bill.id, { text, salt });
+        return onDone({ text, salt });
+      },
+    },
+    h('label', { for: fid, class: 'label' }, t('row.restoreLabel')),
+    h('div', { class: 'copy-row' }, input, h('button', { type: 'submit', class: 'btn btn--quiet btn--sm' }, t('row.restoreGo'))),
+    err);
   }
 }
 
@@ -1543,12 +1715,14 @@ async function viewNotes(main) {
 }
 
 async function viewMissing(main) {
+  document.title = `${t('view.missing')} · PaidThrough`;
   main.append(h('div', { class: 'wrap narrow' },
     h('h1', { class: 'h-view' }, t('view.missing')),
     h('p', { class: 'lede' }, h('a', { href: '#/' }, t('view.home')))));
 }
 
 const VIEWS = { home: viewHome, bill: viewBill, pay: viewPay, desk: viewDesk, notes: viewNotes };
+const TITLES = { home: 'title.home', desk: 'desk.title', notes: 'notes.title', bill: 'view.statusEyebrow', pay: 'view.payEyebrow' };
 
 /* ------------------------------------------------------------------ start */
 

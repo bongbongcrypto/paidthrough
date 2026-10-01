@@ -10,6 +10,7 @@
 import { CONFIG } from '../config.js';
 import { STRINGS } from '../i18n.js';
 import { Sim, RpcFail } from './sim.js';
+import { SEL } from '../abi.js';
 
 const q = new URLSearchParams(location.search);
 const PREVIEW = q.get('mode') === 'preview';
@@ -203,6 +204,19 @@ async function seed() {
 }
 const seeded = [];
 
+// A second wallet pays bill `id` straight into the simulated chain (allowance + pay), as if from another
+// device: the page on screen learns of it only through its own reads. Used for the F1 reproductions.
+function payAs(who, id) {
+  const from = ACCOUNTS[who];
+  const b = sim.bills[id - 1];
+  if (!from || !b) return null;
+  sim.allow.set(low(from) + ':' + sim.contract, b.amount);
+  return sim.send({
+    from, to: sim.contract, data: SEL.pay + BigInt(id).toString(16).padStart(64, '0'),
+    gas: '0x30000', maxFeePerGas: '0x' + (40e9).toString(16), maxPriorityFeePerGas: '0x1',
+  });
+}
+
 /* ---------------- control panel */
 
 let panel = null;
@@ -228,6 +242,7 @@ function buildPanel() {
       ${wallet ? `<p>Wallet chain: <b>${wallet.chain === sim.chainId ? 'Arc ' + sim.chainId : wallet.chain}</b> <button data-act="wrongchain" type="button">wrong chain</button></p>` : ''}
       <p>Chain time: <b>${time}</b>${sim.offset ? ` (+${(sim.offset / 3600).toFixed(0)} h)` : ''}</p>
       <div class="dev-row"><button data-act="t1h" type="button">+1 h</button><button data-act="t1d" type="button">+1 day</button><button data-act="t7d" type="button">+7 days</button></div>
+      <div class="dev-row"><button data-act="otherpays" type="button">other wallet pays the bill on screen</button></div>
       ${wallet ? `<label><input type="checkbox" data-flag="reject" ${wallet.rejectNext ? 'checked' : ''}> reject next wallet prompt</label>
       <label><input type="checkbox" data-flag="notyped" ${wallet.noTyped ? 'checked' : ''}> wallet can't sign typed data</label>` : ''}
       <label><input type="checkbox" data-flag="rpcdown" ${sim.rpcDown ? 'checked' : ''}> RPC down</label>
@@ -244,6 +259,7 @@ function buildPanel() {
     if (act === 't1h') sim.travel(3600);
     if (act === 't1d') sim.travel(DAY);
     if (act === 't7d') sim.travel(7 * DAY);
+    if (act === 'otherpays') { const m = location.hash.match(/#\/(?:pay|bill)\/(\d+)/); if (m) payAs('other', Number(m[1])); }
     update();
   });
   el.addEventListener('change', (e) => {
@@ -296,6 +312,7 @@ async function boot() {
       window.ethereum = wallet;
     }
     window.__sim = sim; // for poking from the console
+    window.__payAs = payAs;
     window.__wallet = wallet;
   }
   if (PANEL) {

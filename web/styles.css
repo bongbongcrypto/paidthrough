@@ -48,7 +48,7 @@ html:lang(ko) body { letter-spacing: -0.01em; word-break: keep-all; overflow-wra
 h1, h2, h3 { text-wrap: balance; }
 p { text-wrap: pretty; }
 /* short UI copy: even lines, so a two-word phrase never dangles alone */
-.entry-text p, .hint, .caption, .home-limits, .foot-note, .status-meta, .row-when, .note, .preview p, .public-warn, .lede { text-wrap: balance; }
+.entry-text p, .hint, .caption, .home-limits, .foot-note, .status-meta, .row-when, .note, .preview p, .public-warn, .lede, .pay-public, .pay-check, .pay-other, .needs, .ref-check { text-wrap: balance; }
 img, svg { display: block; max-width: 100%; }
 
 a { color: var(--blue); text-decoration-thickness: 1px; text-underline-offset: 3px; }
@@ -286,13 +286,17 @@ html:lang(ko) .stamp-sub { font-size: 11px; }
 .paper-row dt { font-size: 13px; font-weight: 600; color: var(--muted); }
 .paper-row dd { margin: 0; font-size: 15px; font-variant-numeric: tabular-nums; }
 .row-sub { display: block; font-size: 13px; color: var(--muted); }
-.row-sub--check { margin-top: 6px; color: var(--ink); font-weight: 600; text-wrap: balance; }
 /* full biller address: checksummed, 4-character groups; copying the text gives the address without spaces */
 .addr { display: inline-flex; flex-wrap: wrap; gap: 0 .45em; font-family: var(--mono); font-size: 14px; letter-spacing: .01em; }
 .addr-g { white-space: nowrap; }
 .addr-wrap { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 14px; }
 .btn-text--sm { min-height: 44px; margin: -12px 0; font-size: 13px; }
 .pay-first { margin: 0; font-size: 14px; color: var(--muted); }
+/* what paying makes public (payer's wallet) and what to check first: plain boxes, no colour stripes */
+.pay-public { margin: 0; padding: 10px 12px; border-radius: var(--r-field); background: var(--band); font-size: 14px; line-height: 1.45; }
+.pay-check { margin: 4px 0 0; font-size: 14px; font-weight: 600; line-height: 1.45; }
+.pay-other { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.45; outline-offset: 4px; }
+.ref-text--bad { color: var(--muted); font-weight: 500; text-decoration: line-through; text-decoration-thickness: 1px; }
 
 /* the deadline line under the paper */
 .deadline { max-width: 500px; margin: 22px auto 0; }
@@ -405,12 +409,17 @@ html:lang(ko) .stamp-sub { font-size: 11px; }
 .list-who { margin: 0 0 18px; font-size: 13px; color: var(--muted); }
 .desk-list > .btn { margin-top: 14px; }
 
+.needs { margin: 0 0 16px; padding: 12px 14px; border-radius: var(--r-field); background: var(--band); font-size: 14px; line-height: 1.45; }
+.needs--on { font-weight: 600; }
 .rows { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--hair); }
 .row {
   display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 15.5rem);
   gap: 8px 20px; align-items: start; padding: 18px 0; border-bottom: 1px solid var(--hair-soft);
 }
-.row > .msg { grid-column: 1 / -1; }
+.row > .msg, .row > .restore { grid-column: 1 / -1; }
+.row > .msg:focus { outline-offset: 4px; }
+.restore { display: grid; gap: 6px; margin-top: 4px; }
+.restore .label { margin: 0; color: var(--ink); }
 .row p { margin: 0; }
 .row-no { font-size: 12px; font-weight: 600; color: var(--muted); }
 .row-ex { margin-left: 8px; padding: 1px 8px; border: 1px dashed var(--hair-strong); border-radius: var(--r-pill); font-size: 11px; }
@@ -473,7 +482,7 @@ html:lang(ko) .chip { letter-spacing: .01em; }
   .entry > .btn { justify-self: start; }
   .desk-form { padding: 22px 16px 20px; border-radius: 24px; }
   .field-pair { grid-template-columns: minmax(0, 1fr); }
-  .row { grid-template-columns: minmax(0, 1fr) auto; }
+  .row { grid-template-columns: minmax(0, 1fr); } /* amount, then state, then actions: nothing side by side */
   .row-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .row-links { justify-content: flex-start; }
   .foot { margin-top: 56px; }
