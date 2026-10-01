@@ -1,0 +1,28 @@
+# TEMPLATE ONLY - not installed anywhere. Installing it, funding the keeper wallet and turning on
+# --send are the operator's decisions. Paths assume /home/ubuntu/bots/<name>; adjust to your server.
+#
+# One run per timer tick: rebuild bills from events, refund every bill whose claim window has
+# passed, send one Telegram summary when something happened. Type=oneshot means the timer never
+# starts a second run while one is still going.
+[Unit]
+Description=PaidThrough refund keeper (one run)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/bots/paidthrough
+# Key file and alert file live outside the repo, chmod 600. Never put the key in this unit.
+Environment=PAIDTHROUGH_KEEPER_ENV=/home/ubuntu/.paidthrough-keeper.env
+Environment=PAIDTHROUGH_ALERT_ENV=/home/ubuntu/.alert.env
+Environment=PAIDTHROUGH_KEEPER_STATE=/home/ubuntu/.paidthrough-keeper
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3.11 keeper/paidthrough_keeper.py run --send --notify --network mainnet
+TimeoutStartSec=240
+MemoryMax=200M
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/.paidthrough-keeper

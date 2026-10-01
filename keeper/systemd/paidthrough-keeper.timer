@@ -1,0 +1,12 @@
+# TEMPLATE ONLY - not installed anywhere. Enabling it is the operator's decision.
+[Unit]
+Description=Run the PaidThrough refund keeper every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -82,6 +82,9 @@ Custom errors, one per failed guard (e.g. `NotPayee`, `WrongStatus`, `PayWindowC
 - Default is dry-run with no key. `--send` reads the key from a file outside the repo (path in env `PAIDTHROUGH_KEEPER_ENV`, default `~/.paidthrough-keeper.env`); never from the repo, never printed.
 - EIP-1559 fees: `maxFeePerGas >= max(2 × baseFee, 20 gwei)`; priority fee from `eth_maxPriorityFeePerGas`. A simulated revert (e.g. blocklisted payer) is skipped and reported, not retried in a loop.
 - Optional Telegram summary to the operator, only with `--notify`.
+- `keeper/deployments.json` shape per network: `{"address": "0x…", "fromBlock": N}` (`null` until deployed). The deploy step writes it; `web/config.js` mirrors the address.
+- Arc RPC limits measured 2026-10-01: `eth_getLogs` accepts 10,000 blocks inclusive (10,001 → `-32012 requested range too large`); a separate result cap (`-32602 … max results 2000`) is handled by halving. Requests without a User-Agent get HTTP 403.
+- Incremental scan: raw logs and the last scanned block are cached per network/contract under `~/.paidthrough-keeper/`, re-read with a 100-block overlap. Dry-run simulates from the zero address unless `--from-address` is given.
 
 ## Web (`web/`, static, no build step)
 - Views (hash routes): `#/bill/<id>` family status (no wallet needed), `#/pay/<id>` payer, `#/desk` biller (issue, list own bills, claim/decline/cancel). Landing `#/` explains the product in one screen and links the three.
