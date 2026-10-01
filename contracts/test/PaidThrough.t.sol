@@ -498,12 +498,59 @@ contract PaidThroughTest is PaidThroughBase {
 
     // ------------------------------------------------------------------ native value
 
-    function test_native_callWithValueToPayReverts() public {
-        uint256 id = _issue();
-        vm.deal(address(this), 1 ether);
-        (bool ok,) = address(pt).call{value: 1}(abi.encodeCall(PaidThrough.pay, (id)));
-        assertFalse(ok);
+    function _withValue(address from, bytes memory data) internal returns (bool ok) {
+        vm.deal(from, 1 ether);
+        vm.prank(from);
+        (ok,) = address(pt).call{value: 1}(data);
+    }
+
+    function _withoutValue(address from, bytes memory data) internal returns (bool ok) {
+        vm.prank(from);
+        (ok,) = address(pt).call(data);
+    }
+
+    /// Each state-changing call fails with 1 wei attached and succeeds without it, from a caller that is otherwise
+    /// fully able to make it (funded, approved, right role, right time), so the value is the only reason.
+    function test_native_everyFunctionRejectsValue_butWorksWithout() public {
+        uint256 a = _issue(); // claim
+        uint256 b = _issue(); // decline
+        uint256 c = _issue(); // cancel
+        uint256 d = _issue(); // refund
+        uint256 e = _issue(); // payWithAuthorization
+        vm.prank(payer);
+        usdc.approve(address(pt), 4 * uint256(AMOUNT));
+
+        bytes memory payA = abi.encodeCall(PaidThrough.pay, (a));
+        assertFalse(_withValue(payer, payA), "pay with value");
+        assertTrue(_withoutValue(payer, payA), "pay");
+        assertTrue(_withoutValue(payer, abi.encodeCall(PaidThrough.pay, (b))));
+        assertTrue(_withoutValue(payer, abi.encodeCall(PaidThrough.pay, (d))));
+
+        uint256 validBefore = block.timestamp + 1 hours;
+        (uint8 v, bytes32 r, bytes32 s) = _sign(PAYER_PK, address(pt), AMOUNT, 0, validBefore, pt.authNonce(e));
+        bytes memory pwa = abi.encodeCall(PaidThrough.payWithAuthorization, (e, payer, 0, validBefore, v, r, s));
+        assertFalse(_withValue(relayer, pwa), "payWithAuthorization with value");
+        assertTrue(_withoutValue(relayer, pwa), "payWithAuthorization");
+
+        bytes memory claimA = abi.encodeCall(PaidThrough.claim, (a));
+        assertFalse(_withValue(payee, claimA), "claim with value");
+        assertTrue(_withoutValue(payee, claimA), "claim");
+
+        bytes memory declineB = abi.encodeCall(PaidThrough.decline, (b));
+        assertFalse(_withValue(payee, declineB), "decline with value");
+        assertTrue(_withoutValue(payee, declineB), "decline");
+
+        bytes memory cancelC = abi.encodeCall(PaidThrough.cancel, (c));
+        assertFalse(_withValue(payee, cancelC), "cancel with value");
+        assertTrue(_withoutValue(payee, cancelC), "cancel");
+
+        vm.warp(pt.getBill(d).claimBy);
+        bytes memory refundD = abi.encodeCall(PaidThrough.refund, (d));
+        assertFalse(_withValue(stranger, refundD), "refund with value");
+        assertTrue(_withoutValue(stranger, refundD), "refund");
+
         assertEq(address(pt).balance, 0);
+        assertEq(usdc.balanceOf(address(pt)), AMOUNT); // bill e is still Paid
     }
 
     function test_native_callWithValueToIssueReverts() public {

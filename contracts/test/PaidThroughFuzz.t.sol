@@ -155,6 +155,8 @@ contract PaidThroughFuzzTest is PaidThroughBase {
     }
 
     function testFuzz_issue_payByAcceptedIffInWindow(uint64 payBy) public {
+        // Concentrate on [now - 60 days, now + 425 days] so both branches and both edges get real coverage.
+        payBy = uint64(bound(payBy, block.timestamp - 60 days, block.timestamp + 425 days));
         vm.prank(payee);
         if (payBy <= block.timestamp || payBy > block.timestamp + 365 days) {
             vm.expectRevert(PaidThrough.BadPayBy.selector);

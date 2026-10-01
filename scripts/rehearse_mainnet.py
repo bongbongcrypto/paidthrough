@@ -53,6 +53,14 @@ ALLOWANCE_SLOT = 10
 # Arc blocklist precompile: mapping(address => uint256) at slot 2 (found by probing; verified again at runtime).
 BLOCKLIST_SLOT = 2
 
+# Addresses USDC emitted Blacklisted(address) for on Arc mainnet (public logs of 0x3600...0000; blocks 0x7cff2,
+# 0x7d007, 0x7d01c). The script re-checks USDC.isBlacklisted at the pinned block and uses the first still blocked.
+REAL_BLOCKLIST_CANDIDATES = [
+    "0x1999ef52700c34de7ec2b68a28aafb37db0c5ade",
+    "0x002471b8a185f9980708d0eaec5b289714f56f8d",
+    "0xd19df746fd2a145588b3a22672bacfd2e5454f61",
+]
+
 STATUS = ["None", "Open", "Paid", "Claimed", "Refunded", "Declined", "Cancelled"]
 BILL_ABI = "(address,uint96,address,uint64,uint32,address,uint64,uint8,bytes32)"
 BILL_FIELDS = ["payee", "amount", "payer", "payBy", "claimWindow", "allowedPayer", "claimBy", "status", "ref"]
@@ -310,11 +318,11 @@ class Rehearsal:
         sig = acct.unsafe_sign_hash(digest)
         return sig.v, sig.r.to_bytes(32, "big"), sig.s.to_bytes(32, "big")
 
-    def pwa_data(self, bill_id: int, payer, v, r, s, valid_before: int) -> str:
+    def pwa_data(self, bill_id: int, payer_addr: str, v, r, s, valid_before: int) -> str:
         return calldata(
             "payWithAuthorization(uint256,address,uint256,uint256,uint8,bytes32,bytes32)",
             ["uint256", "address", "uint256", "uint256", "uint8", "bytes32", "bytes32"],
-            [bill_id, payer.address, 0, valid_before, v, r, s],
+            [bill_id, payer_addr, 0, valid_before, v, r, s],
         )
 
     # ---- step runner
@@ -357,14 +365,14 @@ class Rehearsal:
             ["(address,bytes)[]", "address", "address[]"],
             [[(t, bytes.fromhex(d[2:])) for t, d in calls], USDC, [a for _, a in watch]],
         )
-        ov = merge(overrides, code(self.probe, self.probe_code), balance(self.probe, GAS_MONEY))
+        ov = merge(overrides, code(self.probe, self.probe_code))
+        if "balance" not in ov.get(self.probe.lower(), {}):
+            ov = merge(ov, balance(self.probe, GAS_MONEY))
         tx = {"from": self.keeper.address, "to": self.probe, "data": data}
         ok, ret, reason = self.eth_call(tx, ov, block_ov)
         if not ok:
             return f"probe failed: {reason}"
-        results, token_bals, _native = decode(
-            ["(bool,bytes)[]", "uint256[]", "uint256[]"], bytes.fromhex(ret[2:])
-        )
+        results, before, after = decode(["(bool,bytes)[]", "uint256[]", "uint256[]"], bytes.fromhex(ret[2:]))
         parts = []
         for i, (cok, cret) in enumerate(results):
             if not cok:
@@ -373,7 +381,9 @@ class Rehearsal:
         if last_ok and len(last_ret) == 9 * 32:
             b = decode([BILL_ABI], last_ret)[0]
             parts.append(f"bill status {STATUS[b[7]]}")
-        parts += [f"{label} {usdc_str(v)} USDC" for (label, _), v in zip(watch, token_bals)]
+        for (label, _), b0, b1 in zip(watch, before, after):
+            delta = b1 - b0
+            parts.append(f"{label} {'+' if delta >= 0 else ''}{usdc_str(delta)} ({usdc_str(b0)} -> {usdc_str(b1)})")
         return ", ".join(parts)
 
     # ---- the rehearsal
@@ -432,6 +442,9 @@ class Rehearsal:
         open1_any = self.pt_state(L.count(1), self.bill(1, "Open"))
 
         # pay (approve state set through the real FiatToken allowance slot)
+        approve_data = calldata("approve(address,uint256)", ["address", "uint256"], [self.pt, AMOUNT])
+        self.step("approve (USDC; separate tx before pay)", payer, approve_data, self.base(payer_funds), "ok",
+                  to=USDC, note="the signature path needs no approve")
         if allowance_ok:
             allow = self.allowance_override(payer.address, self.pt, AMOUNT)
             self.step("pay (approve + pay; transferFrom)", payer, bill_data("pay"),
@@ -448,7 +461,7 @@ class Rehearsal:
         # payWithAuthorization: real EIP-712 signature on the mainnet domain, submitted by a relayer
         valid_before = self.now + 3600
         v, r, s = self.sign_auth(payer, 1, valid_before)
-        pwa = self.pwa_data(1, payer, v, r, s, valid_before)
+        pwa = self.pwa_data(1, payer.address, v, r, s, valid_before)
         self.step("payWithAuthorization (relayer submits payer's signature)", relayer, pwa,
                   self.base(open1, payer_funds), "ok",
                   probe={"calls": [(self.pt, pwa), (self.pt, getbill)],
@@ -494,13 +507,31 @@ class Rehearsal:
         self.step("refund at claimBy - 1", keeper, bill_data("refund"), self.base(paid()), "ClaimWindowOpen",
                   block_ov={"time": hex(claim_by - 1)})
         two_open = self.pt_state(L.count(2), self.bill(1, "Open"), self.bill(2, "Open", payee=self.payee2.address))
-        pwa_b = self.pwa_data(2, payer, v, r, s, valid_before)  # signature made for bill 1
+        pwa_b = self.pwa_data(2, payer.address, v, r, s, valid_before)  # signature made for bill 1
         self.step("signature for bill 1 used on bill 2 (same amount, other payee)", relayer, pwa_b,
                   self.base(two_open, payer_funds), "invalid signature")
         self.step("pay after payBy", payer, bill_data("pay"), self.base(open1, payer_funds), "PayWindowClosed",
                   block_ov={"time": hex(pay_by)})
         self.step("pay by non-allowed payer", relayer, bill_data("pay"), self.base(open1), "NotAllowedPayer")
         self.step("claim by non-payee", keeper, bill_data("claim"), self.base(paid()), "NotPayee")
+
+        # The signature cannot be taken anywhere else: the real token enforces to == msg.sender.
+        rwa_sig = "receiveWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)"
+        rwa_types = ["address", "address", "uint256", "uint256", "uint256", "bytes32", "uint8", "bytes32", "bytes32"]
+        direct = calldata(rwa_sig, rwa_types,
+                          [payer.address, self.pt, AMOUNT, 0, valid_before, self.auth_nonce(1), v, r, s])
+        self.step("signature (to = PaidThrough) submitted straight to USDC by another address", relayer, direct,
+                  self.base(open1, payer_funds), "caller must be the payee", to=USDC,
+                  note="real FiatToken to == msg.sender check; a revert leaves the nonce unused")
+        redirect = calldata(rwa_sig, rwa_types,
+                            [payer.address, relayer.address, AMOUNT, 0, valid_before, self.auth_nonce(1), v, r, s])
+        self.step("same signature with to = the submitter (redirect attempt)", relayer, redirect,
+                  self.base(open1, payer_funds), "invalid signature", to=USDC)
+        stray = self.pt_state(L.count(1), self.bill(1, "Open"), native=held)
+        self.step("payWithAuthorization with payer = PaidThrough itself (stray USDC present)", relayer,
+                  self.pwa_data(1, self.pt, v, r, s, valid_before), self.base(stray), "invalid signature")
+        self.step("payWithAuthorization with payer = the USDC contract", relayer,
+                  self.pwa_data(1, USDC, v, r, s, valid_before), self.base(open1_any), "invalid signature")
 
         # EIP-7702: a payer address carrying a delegation is checked by USDC only through ERC-1271.
         delegated = {payer.address: {"code": "0xef0100" + self.keeper.address[2:].lower()}}
@@ -534,8 +565,47 @@ class Rehearsal:
                                     blocked(payer.address)), "revert", note=note)
             self.step("claim while the contract itself is blocklisted", payee, bill_data("claim"),
                       self.base(paid(), blocked(self.pt)), "revert", note=note)
+            # Who is checked? Calls where the blocklisted address only sends the transaction (it is not a party to
+            # the USDC movement, which goes contract -> someone else).
+            self.step("decline sent by a blocklisted payee (money goes to the payer)", payee, bill_data("decline"),
+                      self.base(paid(), blocked(payee.address)), None, note=note)
+            self.step("refund sent by a blocklisted third party (money goes to the payer)", keeper,
+                      bill_data("refund"), self.base(paid(), blocked(keeper.address)), None, block_ov=at_claim_by,
+                      note=note)
+            self.step("claim by the payee while the payer is blocklisted", payee, bill_data("claim"),
+                      self.base(paid(), blocked(payer.address)), None, note=note)
+            self.step("payWithAuthorization sent by a blocklisted relayer for a clean payer", relayer, pwa,
+                      self.base(open1, payer_funds, blocked(relayer.address)), None, note=note)
         else:
             self.skip("blocklist cases", "blocklist slot assumption failed")
+
+        # blocklist, real chain state: an address USDC really has blocklisted on Arc mainnet right now
+        real = self.find_really_blocked()
+        if real:
+            note = f"{real} is blocklisted on Arc mainnet (USDC.isBlacklisted = true at this block); no override"
+            claimer = type("Caller", (), {"address": real})()
+            self.step("claim to a really blocklisted payee", claimer, bill_data("claim"),
+                      self.base(paid(payee_addr=real)), "revert", note=note)
+            self.step("refund to a really blocklisted payer", keeper, bill_data("refund"),
+                      self.base(paid(payer_addr=real)), "revert", block_ov=at_claim_by, note=note)
+            self.step("decline to a really blocklisted payer", payee, bill_data("decline"),
+                      self.base(paid(payer_addr=real)), "revert", note=note)
+            self.step("decline sent by a really blocklisted payee (eth_call from that address)", claimer,
+                      bill_data("decline"), self.base(paid(payee_addr=real)), None,
+                      note=note + "; eth_call only, whether Arc admits a transaction from it is not tested")
+        else:
+            self.skip("real blocklisted address", "no candidate address is blocklisted at this block", fail=False)
+
+    def find_really_blocked(self) -> str | None:
+        for cand in REAL_BLOCKLIST_CANDIDATES:
+            data = calldata("isBlacklisted(address)", ["address"], [cand])
+            ret = self.rpc.result("eth_call", [{"to": USDC, "data": data}, self.block_tag])
+            if int(ret, 16) == 1:
+                self.check("real blocklisted address found", True, cand, required=False)
+                return cand
+        self.check("real blocklisted address found", False, f"none of {len(REAL_BLOCKLIST_CANDIDATES)} candidates",
+                   required=False)
+        return None
 
     # ---- slot checks
 
@@ -568,13 +638,13 @@ class Rehearsal:
                    f"without override {int(r0, 16)}, with override {int(r1, 16)}")
         return ok
 
-    def check(self, name: str, ok: bool, detail: str):
-        self.checks.append({"check": name, "ok": ok, "detail": detail})
+    def check(self, name: str, ok: bool, detail: str, required: bool = True):
+        self.checks.append({"check": name, "ok": ok, "detail": detail, "required": required})
         print(f"[{'ok' if ok else 'FAIL'}] {name}: {detail}", flush=True)
 
-    def skip(self, name: str, why: str):
+    def skip(self, name: str, why: str, fail: bool = True):
         self.steps.append({"step": name, "caller": "-", "expected": "-", "result": f"skipped: {why}",
-                           "match": "NO", "gas": None, "cost_usdc": "-", "post_state": "", "note": "",
+                           "match": "NO" if fail else "info", "gas": None, "cost_usdc": "-", "post_state": "", "note": "",
                            "return": None})
 
     # ---- report
@@ -604,7 +674,8 @@ class Rehearsal:
         return "\n".join(lines) + "\n"
 
     def passed(self) -> bool:
-        return all(c["ok"] for c in self.checks) and all(s["match"] in ("yes", "info") for s in self.steps)
+        checks_ok = all(c["ok"] or not c["required"] for c in self.checks)
+        return checks_ok and all(s["match"] in ("yes", "info") for s in self.steps)
 
 
 def main() -> int:

@@ -20,7 +20,7 @@ runs = 1000
 [invariant]
 runs = 256
 depth = 64
-fail_on_revert = false
+fail_on_revert = true
 show_metrics = true
 
 [fmt]

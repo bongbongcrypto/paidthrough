@@ -15,6 +15,17 @@ interface IArcUSDC {
     function allowance(address, address) external view returns (uint256);
     function approve(address, uint256) external returns (bool);
     function authorizationState(address, bytes32) external view returns (bool);
+    function receiveWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external;
 }
 
 /// @notice Local stand-in for Arc's native-USDC transfer precompile (0x1800…0000), which anvil does not implement.
@@ -85,9 +96,10 @@ contract ArcForkTest is Test {
         if (!_fork()) return;
         _logCoinbaseLink();
         address payer = vm.addr(PAYER_PK);
-        if (!_fundPayer(payer)) return;
+        assertTrue(_fundPayer(payer), "vm.deal must fund the USDC ERC-20 view on the fork");
 
         PaidThrough pt = new PaidThrough(ARC_USDC, MAX_AMOUNT);
+        _assertDirectSubmitBlocked(pt, payer);
         _flowAuthPayThenClaim(pt, payer);
         _flowPayThenRefund(pt, payer);
     }
@@ -118,7 +130,7 @@ contract ArcForkTest is Test {
             return false;
         }
         if (bal != 30e6) {
-            console2.log("RESULT: vm.deal did not fund the ERC-20 view (expected 30000000). Flows not run on fork.");
+            console2.log("RESULT: vm.deal did not fund the ERC-20 view (expected 30000000); failing the test.");
             return false;
         }
         console2.log("RESULT: vm.deal funds the ERC-20 view; running flows against the real USDC");
@@ -139,6 +151,34 @@ contract ArcForkTest is Test {
         return vm.sign(PAYER_PK, digest);
     }
 
+    struct Auth {
+        address from;
+        address to;
+        uint256 validBefore;
+        bytes32 nonce;
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+    }
+
+    /// @dev REAL TOKEN (no stub involved): a valid signature for to = PaidThrough, submitted straight to USDC by
+    ///      another address, reverts on FiatToken's `to == msg.sender` check and leaves the nonce unused.
+    function _assertDirectSubmitBlocked(PaidThrough pt, address payer) internal {
+        vm.prank(makeAddr("arc-payee"));
+        uint256 id = pt.issue(AMOUNT, uint64(block.timestamp + 1 days), 1 days, payer, keccak256("arc-fork-direct"));
+        Auth memory a;
+        a.from = payer;
+        a.to = address(pt);
+        a.validBefore = block.timestamp + 1 hours;
+        a.nonce = pt.authNonce(id);
+        (a.v, a.r, a.s) = _authSig(pt, payer, id, a.validBefore);
+        vm.prank(makeAddr("arc-attacker"));
+        vm.expectRevert(bytes("FiatTokenV2: caller must be the payee"));
+        usdc.receiveWithAuthorization(a.from, a.to, AMOUNT, 0, a.validBefore, a.nonce, a.v, a.r, a.s);
+        assertFalse(usdc.authorizationState(payer, a.nonce), "direct submit must not consume the nonce");
+        console2.log("REAL TOKEN: direct receiveWithAuthorization by another address reverted; nonce unused");
+    }
+
     /// @dev Flow 1: issue -> payWithAuthorization (real domain, relayer submits) -> claim.
     function _flowAuthPayThenClaim(PaidThrough pt, address payer) internal {
         address payee = makeAddr("arc-payee");
@@ -152,16 +192,17 @@ contract ArcForkTest is Test {
         console2.log("payer code length on Arc mainnet", payer.code.length);
         bool paid = _tryAuthPay(pt, id, payer, validBefore, v, r, s);
         if (!paid && payer.code.length > 0) {
-            console2.log("FINDING: payer carries code (EIP-7702 delegation); real USDC rejected the ECDSA signature");
+            console2.log("REAL TOKEN: payer carries code (EIP-7702 delegation); USDC rejected the ECDSA signature");
             console2.logBytes(payer.code);
             vm.etch(payer, bytes("")); // local fork only: make the payer a plain EOA again
-            console2.log("cleared the delegation on the local fork; retrying as a plain EOA");
+            console2.log("STUBBED: payer's EIP-7702 delegation cleared on the local fork; retrying as a plain EOA");
             paid = _tryAuthPay(pt, id, payer, validBefore, v, r, s);
         }
         if (!paid) {
             console2.log("native transfer precompile code length", NATIVE_TRANSFER_PRECOMPILE.code.length);
-            console2.log("FINDING: anvil does not implement Arc's native USDC transfer precompile at 0x1800..00;");
-            console2.log("         installing a cheatcode stub on the local fork only and retrying");
+            console2.log("STUBBED: Arc native USDC transfer precompile 0x1800..00 (anvil lacks it) replaced by a");
+            console2.log("STUBBED: cheatcode stub. Money movement below is NOT proven on the real chain; see");
+            console2.log("STUBBED: scripts/rehearse_mainnet.py (arc-rehearsal job) for the real-node run.");
             vm.etch(NATIVE_TRANSFER_PRECOMPILE, type(NativeTransferStub).runtimeCode);
             vm.allowCheatcodes(NATIVE_TRANSFER_PRECOMPILE);
             paid = _tryAuthPay(pt, id, payer, validBefore, v, r, s);
@@ -204,8 +245,9 @@ contract ArcForkTest is Test {
         usdc.approve(address(pt), AMOUNT);
         if (!_tryPay(pt, id, payer)) {
             console2.log("blocklist precompile code length", BLOCKLIST_PRECOMPILE.code.length);
-            console2.log("FINDING: real USDC transferFrom asks a blocklist precompile at 0x1800..01 that anvil lacks;");
-            console2.log("         installing a stub that reports nobody blocked (local fork only) and retrying");
+            console2.log("STUBBED: real USDC transferFrom asks blocklist precompile 0x1800..01, which anvil lacks;");
+            console2.log("STUBBED: replaced by a stub reporting nobody blocked (local fork only). Real blocklist");
+            console2.log("STUBBED: behaviour is proven by scripts/rehearse_mainnet.py on the real node.");
             vm.etch(BLOCKLIST_PRECOMPILE, type(BlocklistStub).runtimeCode);
             assertTrue(_tryPay(pt, id, payer), "pay on real USDC");
         }

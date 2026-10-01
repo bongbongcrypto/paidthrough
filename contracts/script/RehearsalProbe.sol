@@ -19,21 +19,25 @@ contract RehearsalProbe {
         bytes ret;
     }
 
-    /// @notice Runs `calls` in order (a failed call does not stop the rest), then reads token and native balances.
+    /// @notice Reads token balances of `watch`, runs `calls` in order (a failed call does not stop the rest),
+    ///         then reads the balances again.
     function run(Call[] calldata calls, address token, address[] calldata watch)
         external
-        returns (Result[] memory results, uint256[] memory tokenBalances, uint256[] memory nativeBalances)
+        returns (Result[] memory results, uint256[] memory before, uint256[] memory afterwards)
     {
+        before = _balances(token, watch);
         results = new Result[](calls.length);
         for (uint256 i; i < calls.length; ++i) {
             (bool ok, bytes memory ret) = calls[i].target.call(calls[i].data);
             results[i] = Result(ok, ret);
         }
-        tokenBalances = new uint256[](watch.length);
-        nativeBalances = new uint256[](watch.length);
+        afterwards = _balances(token, watch);
+    }
+
+    function _balances(address token, address[] calldata watch) private view returns (uint256[] memory bals) {
+        bals = new uint256[](watch.length);
         for (uint256 i; i < watch.length; ++i) {
-            tokenBalances[i] = IBalanceOf(token).balanceOf(watch[i]);
-            nativeBalances[i] = watch[i].balance;
+            bals[i] = IBalanceOf(token).balanceOf(watch[i]);
         }
     }
 }

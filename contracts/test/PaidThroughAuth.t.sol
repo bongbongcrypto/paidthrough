@@ -254,6 +254,7 @@ contract PaidThroughAuthTest is PaidThroughBase {
         vm.prank(stranger);
         vm.expectRevert(bytes("FiatTokenV2: caller must be the payee"));
         usdc.receiveWithAuthorization(payer, address(pt), AMOUNT, validAfter, validBefore, nonce, v, r, s);
+        assertFalse(usdc.authorizationState(payer, nonce), "nonce not consumed");
         // The signature still works through the contract afterwards.
         pt.payWithAuthorization(id, payer, validAfter, validBefore, v, r, s);
         _assertStatus(id, PaidThrough.Status.Paid);
@@ -292,6 +293,37 @@ contract PaidThroughAuthTest is PaidThroughBase {
         assertEq(b.claimBy, 0);
     }
 
+    // ---- payer argument pointing at a contract: the token cannot be made to pull from PaidThrough or itself ----
+
+    function test_revert_payerIsPaidThroughItself() public {
+        usdc.mint(address(pt), AMOUNT); // even with stray tokens sitting in the contract
+        uint256 id = _issue();
+        (uint8 v, bytes32 r, bytes32 s) = _signBill(PAYER_PK, id);
+        vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
+        pt.payWithAuthorization(id, address(pt), validAfter, validBefore, v, r, s);
+        _assertStatus(id, PaidThrough.Status.Open);
+        assertEq(usdc.balanceOf(address(pt)), AMOUNT);
+    }
+
+    function test_revert_payerIsTheTokenContract() public {
+        uint256 id = _issue();
+        (uint8 v, bytes32 r, bytes32 s) = _signBill(PAYER_PK, id);
+        vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
+        pt.payWithAuthorization(id, address(usdc), validAfter, validBefore, v, r, s);
+        _assertStatus(id, PaidThrough.Status.Open);
+    }
+
+    function test_revert_signatureRedirectedToAttacker() public {
+        uint256 id = _issue();
+        (uint8 v, bytes32 r, bytes32 s) = _signBill(PAYER_PK, id); // signed for to = PaidThrough
+        bytes32 nonce = pt.authNonce(id);
+        vm.prank(stranger); // stranger names itself as `to`: passes the caller check, fails the signature
+        vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
+        usdc.receiveWithAuthorization(payer, stranger, AMOUNT, validAfter, validBefore, nonce, v, r, s);
+        assertFalse(usdc.authorizationState(payer, nonce));
+        assertEq(usdc.balanceOf(stranger), START_BALANCE);
+    }
+
     // ---- EIP-7702-delegated payers: USDC checks addresses with code only through ERC-1271 ----
 
     function test_delegatedPayer_withoutErc1271_cannotUseSignaturePath_butCanPay() public {
@@ -322,5 +354,70 @@ contract PaidThroughAuthTest is PaidThroughBase {
         (v, r, s) = _signBill(OTHER_PK, id2);
         vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
         pt.payWithAuthorization(id2, payer, validAfter, validBefore, v, r, s);
+    }
+
+    // ---- paying a bill that is already Claimed, Declined or Refunded ----
+
+    function _terminalBills() internal returns (uint256[3] memory ids) {
+        ids[0] = _issueAndPay();
+        vm.prank(payee);
+        pt.claim(ids[0]);
+        ids[1] = _issueAndPay();
+        vm.prank(payee);
+        pt.decline(ids[1]);
+        ids[2] = _issueAndPay();
+        vm.warp(pt.getBill(ids[2]).claimBy);
+        pt.refund(ids[2]);
+    }
+
+    function test_revert_payAndPayWithAuthorization_onClaimedDeclinedRefunded() public {
+        uint256[3] memory ids = _terminalBills();
+        validAfter = block.timestamp - 1;
+        validBefore = block.timestamp + 1 hours;
+        uint256 heldBefore = usdc.balanceOf(address(pt));
+        for (uint256 i; i < 3; ++i) {
+            vm.startPrank(other);
+            usdc.approve(address(pt), AMOUNT);
+            vm.expectRevert(PaidThrough.WrongStatus.selector);
+            pt.pay(ids[i]);
+            vm.stopPrank();
+
+            (uint8 v, bytes32 r, bytes32 s) = _signBill(OTHER_PK, ids[i]);
+            vm.prank(relayer);
+            vm.expectRevert(PaidThrough.WrongStatus.selector);
+            pt.payWithAuthorization(ids[i], other, validAfter, validBefore, v, r, s);
+        }
+        assertEq(usdc.balanceOf(address(pt)), heldBefore);
+        assertEq(usdc.balanceOf(other), START_BALANCE);
+    }
+
+    // ---- EIP-3009 cancelAuthorization: a payer can withdraw the signature path for one bill ----
+
+    function _signCancel(uint256 pk, bytes32 nonce) internal view returns (uint8, bytes32, bytes32) {
+        bytes32 structHash = keccak256(abi.encode(usdc.CANCEL_AUTHORIZATION_TYPEHASH(), vm.addr(pk), nonce));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", usdc.DOMAIN_SEPARATOR(), structHash));
+        return vm.sign(pk, digest);
+    }
+
+    function test_cancelAuthorization_blocksSignaturePathOnly() public {
+        uint256 id = _issue();
+        uint256 other_ = _issue();
+        (uint8 v, bytes32 r, bytes32 s) = _signBill(PAYER_PK, id);
+
+        (uint8 cv, bytes32 cr, bytes32 cs) = _signCancel(PAYER_PK, pt.authNonce(id));
+        usdc.cancelAuthorization(payer, pt.authNonce(id), cv, cr, cs);
+        assertTrue(usdc.authorizationState(payer, pt.authNonce(id)));
+
+        vm.prank(relayer);
+        vm.expectRevert(bytes("FiatTokenV2: authorization is used or canceled"));
+        pt.payWithAuthorization(id, payer, validAfter, validBefore, v, r, s);
+        _assertStatus(id, PaidThrough.Status.Open);
+
+        // The other bill's signature path is untouched, and approve + pay still pays the cancelled one.
+        (v, r, s) = _signBill(PAYER_PK, other_);
+        pt.payWithAuthorization(other_, payer, validAfter, validBefore, v, r, s);
+        _pay(id, payer);
+        _assertStatus(id, PaidThrough.Status.Paid);
+        _assertStatus(other_, PaidThrough.Status.Paid);
     }
 }

@@ -3,7 +3,11 @@ pragma solidity 0.8.30;
 
 /// @notice Test stand-in for Circle's FiatToken v2 (USDC): 6 decimals, EIP-712 domain {"USDC","2"},
 ///         real EIP-3009 receiveWithAuthorization, blocklist with FiatToken's modifier semantics,
-///         plus two fault switches (return false, skim 1 unit) to reach PaidThrough's defensive errors.
+///         plus fault switches (return false, skim 1 unit, over-credit 1 unit) to reach PaidThrough's defensive
+///         errors. The blocklist revert message is the one Arc mainnet's real USDC returns ("Blocked address",
+///         measured by scripts/rehearse_mainnet.py); Circle's generic FiatToken says "Blacklistable: ...".
+///         Like Arc's real USDC (also measured there), a blocklisted transaction sender (tx.origin) cannot move
+///         USDC even between two clean parties.
 contract MockFiatToken {
     string public constant name = "USDC";
     string public constant symbol = "USDC";
@@ -13,6 +17,8 @@ contract MockFiatToken {
     bytes32 public constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH = keccak256(
         "ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
     );
+    bytes32 public constant CANCEL_AUTHORIZATION_TYPEHASH =
+        keccak256("CancelAuthorization(address authorizer,bytes32 nonce)");
     bytes32 private constant EIP712_DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
 
@@ -29,13 +35,15 @@ contract MockFiatToken {
 
     bool public returnFalse;
     bool public skimOne;
+    bool public overCreditOne;
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
     event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
+    event AuthorizationCanceled(address indexed authorizer, bytes32 indexed nonce);
 
     modifier notBlacklisted(address account) {
-        require(!isBlacklisted[account], "Blacklistable: account is blacklisted");
+        require(!isBlacklisted[account], "Blocked address");
         _;
     }
 
@@ -63,6 +71,11 @@ contract MockFiatToken {
         skimOne = on;
     }
 
+    /// @dev Credits the recipient one unit more than sent (minted from nowhere) to prove `!=` in the balance check.
+    function setOverCreditOne(bool on) external {
+        overCreditOne = on;
+    }
+
     // ---- ERC-20 ----
 
     function approve(address spender, uint256 value)
@@ -79,6 +92,7 @@ contract MockFiatToken {
     function transfer(address to, uint256 value)
         public
         virtual
+        notBlacklisted(tx.origin)
         notBlacklisted(msg.sender)
         notBlacklisted(to)
         returns (bool)
@@ -90,6 +104,7 @@ contract MockFiatToken {
 
     function transferFrom(address from, address to, uint256 value)
         external
+        notBlacklisted(tx.origin)
         notBlacklisted(msg.sender)
         notBlacklisted(from)
         notBlacklisted(to)
@@ -122,7 +137,7 @@ contract MockFiatToken {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external notBlacklisted(from) notBlacklisted(to) {
+    ) external notBlacklisted(tx.origin) notBlacklisted(from) notBlacklisted(to) {
         require(to == msg.sender, "FiatTokenV2: caller must be the payee");
         require(block.timestamp > validAfter, "FiatTokenV2: authorization is not yet valid");
         require(block.timestamp < validBefore, "FiatTokenV2: authorization is expired");
@@ -138,9 +153,23 @@ contract MockFiatToken {
         _transfer(from, to, value);
     }
 
+    /// @notice EIP-3009 cancelAuthorization: the authorizer burns an unused nonce with a signature.
+    function cancelAuthorization(address authorizer, bytes32 nonce, uint8 v, bytes32 r, bytes32 s) external {
+        require(!authorizationState[authorizer][nonce], "FiatTokenV2: authorization is used or canceled");
+        bytes32 structHash = keccak256(abi.encode(CANCEL_AUTHORIZATION_TYPEHASH, authorizer, nonce));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash));
+        require(_isValidSignatureNow(authorizer, digest, v, r, s), "FiatTokenV2: invalid signature");
+        authorizationState[authorizer][nonce] = true;
+        emit AuthorizationCanceled(authorizer, nonce);
+    }
+
     // ---- internals ----
 
+    /// @dev Hook run before every balance move (transfer, transferFrom, receiveWithAuthorization).
+    function _beforeMove() internal virtual {}
+
     function _transfer(address from, address to, uint256 value) internal {
+        _beforeMove();
         require(from != address(0), "ERC20: transfer from the zero address");
         require(to != address(0), "ERC20: transfer to the zero address");
         require(value <= balanceOf[from], "ERC20: transfer amount exceeds balance");
@@ -150,6 +179,10 @@ contract MockFiatToken {
             balanceOf[SKIM_SINK] += 1;
             emit Transfer(from, to, value - 1);
             emit Transfer(from, SKIM_SINK, 1);
+        } else if (overCreditOne) {
+            balanceOf[to] += value + 1;
+            totalSupply += 1;
+            emit Transfer(from, to, value + 1);
         } else {
             balanceOf[to] += value;
             emit Transfer(from, to, value);
