@@ -137,15 +137,15 @@ contract MockFiatToken {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external notBlacklisted(tx.origin) notBlacklisted(from) notBlacklisted(to) {
+    ) external {
+        _requireNotBlocked(tx.origin);
+        _requireNotBlocked(from);
+        _requireNotBlocked(to);
         require(to == msg.sender, "FiatTokenV2: caller must be the payee");
         require(block.timestamp > validAfter, "FiatTokenV2: authorization is not yet valid");
         require(block.timestamp < validBefore, "FiatTokenV2: authorization is expired");
         require(!authorizationState[from][nonce], "FiatTokenV2: authorization is used or canceled");
-
-        bytes32 structHash =
-            keccak256(abi.encode(RECEIVE_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce));
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash));
+        bytes32 digest = _receiveDigest(from, to, value, validAfter, validBefore, nonce);
         require(_isValidSignatureNow(from, digest, v, r, s), "FiatTokenV2: invalid signature");
 
         authorizationState[from][nonce] = true;
@@ -164,6 +164,23 @@ contract MockFiatToken {
     }
 
     // ---- internals ----
+
+    function _requireNotBlocked(address account) internal view {
+        require(!isBlacklisted[account], "Blocked address");
+    }
+
+    function _receiveDigest(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce
+    ) internal view returns (bytes32) {
+        bytes32 structHash =
+            keccak256(abi.encode(RECEIVE_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce));
+        return keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash));
+    }
 
     /// @dev Hook run before every balance move (transfer, transferFrom, receiveWithAuthorization).
     function _beforeMove() internal virtual {}
