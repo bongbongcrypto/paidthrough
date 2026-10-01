@@ -2,6 +2,7 @@
 pragma solidity 0.8.30;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {console2} from "forge-std/console2.sol";
 import {PaidThrough} from "../src/PaidThrough.sol";
 
@@ -16,6 +17,20 @@ interface IArcUSDC {
     function authorizationState(address, bytes32) external view returns (bool);
 }
 
+/// @notice Local stand-in for Arc's native-USDC transfer precompile (0x1800…0000), which anvil does not implement.
+///         Real FiatToken on Arc calls transfer(from, to, value18) on it; this stub moves the native (18-decimal)
+///         balances with cheatcodes so the rest of the real token logic can run on the fork. Fork-only.
+contract NativeTransferStub {
+    Vm internal constant VM = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    function transfer(address from, address to, uint256 value) external returns (bool) {
+        require(from.balance >= value, "stub: insufficient native balance");
+        VM.deal(from, from.balance - value);
+        VM.deal(to, to.balance + value);
+        return true;
+    }
+}
+
 /// @notice Runs only with ARC_RPC_URL set. Forks Arc mainnet and exercises PaidThrough against the real USDC.
 ///         Read-only against the network: nothing is broadcast; all state lives in the local fork.
 contract ArcForkTest is Test {
@@ -25,7 +40,8 @@ contract ArcForkTest is Test {
     bytes32 internal constant RECEIVE_TYPEHASH = 0xd099cc98ef71107a616c4f0f941f04c322d8e254fe26b3c6668db87aae413de8;
     uint96 internal constant MAX_AMOUNT = 10_000e6;
     uint96 internal constant AMOUNT = 25_500_000; // 25.50 USDC
-    uint256 internal constant PAYER_PK = 0xB0B; // Foundry test key, never funded on any real network
+    uint256 internal constant PAYER_PK = 0xB0B; // public Foundry test key: never holds real funds
+    address internal constant NATIVE_TRANSFER_PRECOMPILE = 0x1800000000000000000000000000000000000000;
 
     IArcUSDC internal usdc = IArcUSDC(ARC_USDC);
 
@@ -133,6 +149,13 @@ contract ArcForkTest is Test {
             console2.log("cleared the delegation on the local fork; retrying as a plain EOA");
             paid = _tryAuthPay(pt, id, payer, validBefore, v, r, s);
         }
+        if (!paid) {
+            console2.log("native transfer precompile code length", NATIVE_TRANSFER_PRECOMPILE.code.length);
+            console2.log("FINDING: anvil does not implement Arc's native USDC transfer precompile at 0x1800..00;");
+            console2.log("         installing a cheatcode stub on the local fork only and retrying");
+            vm.etch(NATIVE_TRANSFER_PRECOMPILE, type(NativeTransferStub).runtimeCode);
+            paid = _tryAuthPay(pt, id, payer, validBefore, v, r, s);
+        }
         assertTrue(paid, "payWithAuthorization on real USDC");
         assertEq(usdc.balanceOf(address(pt)), AMOUNT);
         assertTrue(usdc.authorizationState(payer, pt.authNonce(id)));
@@ -140,6 +163,8 @@ contract ArcForkTest is Test {
         pt.claim(id);
         assertEq(usdc.balanceOf(payee), AMOUNT);
         assertEq(usdc.balanceOf(address(pt)), 0);
+        assertEq(usdc.balanceOf(payer), 30e6 - AMOUNT, "payer paid exactly 25.50 USDC");
+        assertEq(payee.balance, uint256(AMOUNT) * 1e12, "payee native balance = amount scaled to 18 decimals");
         console2.log("flow 1 (auth pay -> claim) ok; payer USDC left", usdc.balanceOf(payer));
     }
 
