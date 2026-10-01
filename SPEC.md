@@ -89,6 +89,9 @@ Custom errors, one per failed guard (e.g. `NotPayee`, `WrongStatus`, `PayWindowC
 ## Web (`web/`, static, no build step)
 - Views (hash routes): `#/bill/<id>` family status (no wallet needed), `#/pay/<id>` payer, `#/desk` biller (issue, list own bills, claim/decline/cancel). Landing `#/` explains the product in one screen and links the three.
 - Reads chain state from the browser over public RPC; writes through the injected wallet (EIP-1193): `wallet_addEthereumChain`/`wallet_switchEthereumChain`, `eth_signTypedData_v4` for `ReceiveWithAuthorization` (nonce = `authNonce(billId)`, `validBefore = min(payBy, now + 1 hour)`), then `payWithAuthorization` from the payer's own wallet: one transaction, no standing approval. Fallback: approve + pay.
+- Before offering the signature path, the page reads `eth_getCode(payer)`. If the payer has code (EIP-7702 delegation or smart account), Arc's USDC verifies through ERC-1271, so the page defaults to approve + pay and says why.
+- The desk form asks for the payer's address when the biller knows it (`allowedPayer`), so nobody else can pay first.
+- Explorer: mainnet https://explorer.arc.io, testnet https://explorer.testnet.arc.io (`/tx/<hash>`, `/address/<addr>`).
 - `web/config.js` holds per-network addresses; until the contract is deployed the page runs in a clearly labelled preview with one example bill drawn locally.
 - Languages: English, Filipino, Korean. Filipino strings are machine-drafted and labelled so in the UI until a native speaker reviews them.
 - Footer: "Independent project. Not affiliated with Circle or Arc. Unaudited."
