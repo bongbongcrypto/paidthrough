@@ -28,7 +28,7 @@ anyone ──after the deadline──────────► money back to p
 - **One signature to pay.** Arc's USDC supports EIP-3009. The signature is bound to that one bill, so it cannot pay any other bill, and no token approval is left behind. Gas is also USDC, so the payer needs one balance.
 - **Automatic refund.** After the collection deadline, anyone can trigger the refund, and it can only pay the original payer. A small keeper does it for every overdue bill.
 - **Private references.** Everything on Arc is public, so the chain stores only a fingerprint of the reference; the readable text travels in the link's `#fragment`, which browsers never send to a server.
-- **No owner, no fee, no admin.** Nobody can pause, upgrade, redirect or withdraw. A per-bill cap (10,000 USDC) limits the damage from an unknown bug.
+- **No owner or admin, and no fee.** Nobody can pause, upgrade, redirect or withdraw. A per-bill cap (10,000 USDC) limits the damage from an unknown bug.
 
 Details and the threat model: [`docs/DESIGN.md`](docs/DESIGN.md). Interface of record: [`SPEC.md`](SPEC.md).
 
@@ -42,14 +42,14 @@ What Arc changes for this job:
 - **Both ends already connect to Arc.** Upbit in Korea supports USDC on Arc since 2026-09-16. Arc's launch post lists Coins.ph and PDAX in the Philippines among the exchanges live on Arc (we have not tested withdrawals at each).
 - **Arc's protocol-level USDC blocklist** is handled and rehearsed on the real node (see below).
 
-One-signature payment uses USDC's EIP-3009, which Circle's USDC also has on other chains; on Arc it means the payer signs once and pays the network fee from the same USDC.
+One-signature payment uses USDC's EIP-3009, which Circle's USDC also has on other chains; on Arc the payer pays the network fee from the same USDC balance.
 
 ## First users
 
 - **Payer:** a Filipino worker in Korea who already sends money home for a known bill. Buys USDC on Upbit, withdraws it on Arc (fee 0.01 USDC), pays from a phone.
 - **Biller:** a school, tutoring centre or clinic that will publish one Arc address. It needs no integration: it opens the biller desk, issues a bill, sends the link, and collects. To turn USDC into pesos it uses an exchange it can already access.
 - **First proof:** one real bill, end to end on mainnet, with a biller who agreed to take part, plus one bill left uncollected to show the automatic refund. Both transactions will be linked here.
-- **Hardest part, stated plainly:** getting billers to hold an Arc address. That is the work the next steps are for.
+- **Hardest part:** getting billers to hold an Arc address. That is the work the next steps are for.
 
 ## Next steps, and what the grant buys
 
