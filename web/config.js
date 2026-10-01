@@ -30,7 +30,8 @@ export const CONFIG = {
     },
   },
 
-  // Mirrors the contract's constructor argument (no on-chain getter in SPEC.md); used for form checks only.
+  // Mirrors the contract's constructor argument; used for form checks only. The deployed contract also exposes
+  // it on chain as maxAmount() (public immutable, uint96), so the page could read it instead of trusting this copy.
   maxAmountUnits: 10_000_000_000n, // 10,000 USDC in 6-decimal units
 
   // getLogs span the public RPC accepts (measured 2026-10-01: 10,000 blocks; 10,001 is "range too large").

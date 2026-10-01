@@ -11,6 +11,10 @@ Every component (contract, keeper, web, docs) builds against this file. Change i
 | USDC (ERC-20 view of native USDC) | `0x3600000000000000000000000000000000000000` | same address |
 | USDC `DOMAIN_SEPARATOR` | `0x940506929bba468048a19b567f4f0d534714bc06604b5c3017e5d16785ccdf84` | `0x361191522483d32a83e70ae7183b4b9629442c13a78bc9921d6f707911c8c6b0` |
 | base fee | 20 gwei floor (tx below it are dropped silently) | 20 gwei |
+| explorer (Blockscout) | https://explorer.arc.io | https://explorer.testnet.arc.io |
+
+- Testnet RPC: Arc docs now also list `https://rpc.testnet.arc.io`; both it and `https://rpc.testnet.arc.network` (used here) answered `eth_chainId` = `0x4cef52` (5042002) on 2026-10-01.
+- Source verification: Arc docs use `forge verify-contract … --verifier blockscout --verifier-url https://explorer.testnet.arc.io/api/` (no API key). The mainnet explorer API sits behind a Cloudflare challenge for scripts (HTTP 403, 2026-10-01; circlefin/arc-node issue #425), so mainnet may need the explorer's manual Standard-JSON form; `.github/workflows/verify.yml` does both.
 
 - USDC token: FiatToken-style proxy (implementation `0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6` on mainnet) with `decimals() = 6`, `name() = "USDC"`, `version() = "2"`, EIP-3009 (`receiveWithAuthorization`, `transferWithAuthorization`, `authorizationState`, `cancelAuthorization`), EIP-2612 `permit`, `isBlacklisted`.
 - EIP-712 domain for signatures: `{name: "USDC", version: "2", chainId, verifyingContract: 0x3600…0000}`. Computed separator matches the on-chain value above.

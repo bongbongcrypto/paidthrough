@@ -116,6 +116,15 @@ jobs:
         run: pip install eth-account==0.13.7 eth-abi pycryptodome
       - name: Rehearse every path on Arc mainnet (read-only)
         run: python scripts/rehearse_mainnet.py --out contracts/out --markdown rehearsal.md --json rehearsal.json
+      - name: Deploy dry run against the real node (read-only, random sender, no key)
+        run: python scripts/deploy_mainnet.py --network mainnet --out contracts/out | tee deploy-dry-run.txt
+      - name: Verification inputs (the commands verify.yml uses, with a placeholder address)
+        working-directory: contracts
+        run: |
+          ARGS=$(cast abi-encode 'constructor(address,uint96)' 0x3600000000000000000000000000000000000000 10000000000)
+          echo "constructor args: $ARGS"
+          forge verify-contract 0x0000000000000000000000000000000000000001 src/PaidThrough.sol:PaidThrough             --constructor-args "$ARGS" --show-standard-json-input > ../standard-json-input.json
+          python3 -c "import json; d=json.load(open('../standard-json-input.json')); print(d['language'], d['settings']['optimizer'], d['settings'].get('evmVersion'), len(d['sources']), 'sources')"
       - name: Job summary
         if: always()
         run: |
@@ -127,6 +136,8 @@ jobs:
           path: |
             rehearsal.md
             rehearsal.json
+            deploy-dry-run.txt
+            standard-json-input.json
           if-no-files-found: warn
 
   keeper:
@@ -152,3 +163,15 @@ jobs:
       - name: Keeper unit tests
         if: steps.detect.outputs.present == 'true'
         run: python -m unittest discover -s keeper/tests -v
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test deps
+        run: pip install eth-account==0.13.7 eth-abi pycryptodome
+      - name: Deploy script unit tests (fake RPC, no network)
+        run: python -m unittest discover -s scripts/tests -v

@@ -1,0 +1,126 @@
+name: verify
+
+# Publishes PaidThrough's source on Arc's Blockscout explorer for an already deployed address. Manual only.
+# Verifying makes the contract source public: run it after the repository is public.
+#
+# Method (Arc docs, "Build and deploy with Arc Foundry", https://docs.arc.io/arc/tutorials/deploy-on-arc):
+#   forge verify-contract <address> src/PaidThrough.sol:PaidThrough --chain-id <id> \
+#     --verifier blockscout --verifier-url https://explorer.testnet.arc.io/api/
+# Blockscout's Foundry guide (https://docs.blockscout.com/devs/verification/foundry-verification): a self-hosted
+# instance takes <explorer>/api/ and needs no API key.
+# Mainnet caveat: https://explorer.arc.io/api answers scripts with a Cloudflare challenge (HTTP 403 "Just a moment...",
+# checked 2026-10-01; reported as circlefin/arc-node issue #425), so the forge step may fail there. The job therefore
+# always uploads the Standard JSON input and the ABI-encoded constructor arguments for the explorer's manual
+# "Verify & publish" form (Solidity, Standard JSON input), which works from a browser.
+#
+# Compiler settings come from contracts/foundry.toml: solc 0.8.30, optimizer on, 200 runs, evm_version cancun.
+# Check out the same commit the deployed artifact (CI `contracts-out`) was built from.
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: Arc network the contract lives on
+        type: choice
+        options: [testnet, mainnet]
+        required: true
+      address:
+        description: Deployed PaidThrough address (0x...)
+        type: string
+        required: true
+      ref:
+        description: Commit or branch the deployed bytecode was built from
+        type: string
+        default: main
+      max_amount:
+        description: Constructor maxAmount in USDC base units (6 decimals)
+        type: string
+        default: "10000000000"
+
+permissions:
+  contents: read
+
+env:
+  FOUNDRY_VERSION: v1.8.3
+  FORGE_STD_TAG: v1.9.7
+  USDC: "0x3600000000000000000000000000000000000000"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    env:
+      NETWORK: ${{ inputs.network }}
+      ADDRESS: ${{ inputs.address }}
+      MAX_AMOUNT: ${{ inputs.max_amount }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - name: Install forge-std (pinned)
+        run: forge install "foundry-rs/forge-std@${FORGE_STD_TAG}" --no-git
+      - name: Settings
+        id: s
+        run: |
+          if ! [[ "$ADDRESS" =~ ^0x[0-9a-fA-F]{40}$ ]]; then echo "address is not 0x + 40 hex"; exit 1; fi
+          if ! [[ "$MAX_AMOUNT" =~ ^[0-9]+$ ]]; then echo "max_amount is not an integer"; exit 1; fi
+          case "$NETWORK" in
+            mainnet) echo "chain=5042" >> "$GITHUB_OUTPUT"
+                     echo "explorer=https://explorer.arc.io" >> "$GITHUB_OUTPUT"
+                     echo "rpc=https://rpc.mainnet.arc.io" >> "$GITHUB_OUTPUT" ;;
+            testnet) echo "chain=5042002" >> "$GITHUB_OUTPUT"
+                     echo "explorer=https://explorer.testnet.arc.io" >> "$GITHUB_OUTPUT"
+                     echo "rpc=https://rpc.testnet.arc.network" >> "$GITHUB_OUTPUT" ;;
+            *) echo "unknown network"; exit 1 ;;
+          esac
+          echo "args=$(cast abi-encode 'constructor(address,uint96)' "$USDC" "$MAX_AMOUNT")" >> "$GITHUB_OUTPUT"
+      - name: Build
+        run: forge build
+      - name: Runtime code length on chain vs this build
+        run: |
+          onchain=$(cast code --rpc-url "${{ steps.s.outputs.rpc }}" "$ADDRESS")
+          built=$(forge inspect src/PaidThrough.sol:PaidThrough deployedBytecode)
+          echo "on chain: $(( (${#onchain} - 2) / 2 )) bytes; this build: $(( (${#built} - 2) / 2 )) bytes"
+          if [ "${#onchain}" -le 2 ]; then echo "no code at $ADDRESS on $NETWORK"; exit 1; fi
+          if [ "${#onchain}" -ne "${#built}" ]; then echo "length differs: wrong address or wrong ref"; exit 1; fi
+      - name: Standard JSON input (for the explorer's manual form)
+        run: |
+          forge verify-contract "$ADDRESS" src/PaidThrough.sol:PaidThrough \
+            --constructor-args "${{ steps.s.outputs.args }}" --show-standard-json-input > ../standard-json-input.json
+          echo "${{ steps.s.outputs.args }}" > ../constructor-args.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verify-input-${{ inputs.network }}
+          path: |
+            standard-json-input.json
+            constructor-args.txt
+      - name: Verify on Blockscout (forge)
+        id: forge_verify
+        continue-on-error: ${{ inputs.network == 'mainnet' }}
+        run: |
+          forge verify-contract "$ADDRESS" src/PaidThrough.sol:PaidThrough \
+            --chain-id "${{ steps.s.outputs.chain }}" \
+            --constructor-args "${{ steps.s.outputs.args }}" \
+            --verifier blockscout --verifier-url "${{ steps.s.outputs.explorer }}/api/" \
+            --watch
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Source verification: $NETWORK $ADDRESS"
+            echo ""
+            echo "- forge --verifier blockscout: ${{ steps.forge_verify.outcome }}"
+            echo "- explorer: ${{ steps.s.outputs.explorer }}/address/$ADDRESS"
+            echo "- compiler: solc 0.8.30, optimizer on, 200 runs, evm cancun (contracts/foundry.toml)"
+            echo "- constructor args (ABI-encoded): ${{ steps.s.outputs.args }}"
+            echo ""
+            echo "If the forge step failed (mainnet Cloudflare challenge), open the explorer address page in a browser,"
+            echo "choose Verify & publish > Solidity (Standard JSON input), upload standard-json-input.json from the"
+            echo "verify-input artifact, contract src/PaidThrough.sol:PaidThrough, compiler v0.8.30, and paste the"
+            echo "constructor args above."
+          } >> "$GITHUB_STEP_SUMMARY"

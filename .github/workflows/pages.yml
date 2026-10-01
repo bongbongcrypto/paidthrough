@@ -1,0 +1,46 @@
+name: pages
+
+# Publishes web/ to GitHub Pages. Manual only (workflow_dispatch), never on push.
+# Enable and run this only after the repository is public and Settings > Pages > Source is set to
+# "GitHub Actions".
+# Only the app is published: web/dev/ (test harness, screenshots) and design notes are left out.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble site from web/ without web/dev/
+        run: |
+          mkdir _site
+          cp -R web/. _site/
+          rm -rf _site/dev _site/DESIGN.md
+          touch _site/.nojekyll
+          if [ -e _site/dev ]; then echo "web/dev leaked into the site"; exit 1; fi
+          find _site -type f | sort
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
