@@ -537,7 +537,7 @@ class Rehearsal:
         delegated = {payer.address: {"code": "0xef0100" + self.keeper.address[2:].lower()}}
         self.step("payWithAuthorization, payer has an EIP-7702 delegation to a code-less address", relayer, pwa,
                   self.base(open1, payer_funds, delegated), None,
-                  note="code override 0xef0100||address; observes the real token's ERC-1271 branch")
+                  note="code override 0xef0100 + address; observes the real token's ERC-1271 branch")
 
         # blocklist, simulated through the real blocklist precompile's storage
         if blocklist_ok:
