@@ -1,0 +1,110 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FOUNDRY_VERSION: v1.8.3
+  FORGE_STD_TAG: v1.9.7
+
+jobs:
+  fmt:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - name: forge fmt
+        working-directory: contracts
+        run: forge fmt
+      - name: Push formatted files
+        run: |
+          if git diff --quiet -- contracts; then
+            echo "already formatted"
+            exit 0
+          fi
+          git diff --stat -- contracts
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add contracts/src contracts/test contracts/script
+          git commit -m "style(contracts): forge fmt"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - name: Install forge-std (pinned)
+        run: forge install "foundry-rs/forge-std@${FORGE_STD_TAG}" --no-git
+      - name: Versions
+        run: forge --version
+      - name: Build (with sizes)
+        run: forge build --sizes
+      - name: Test
+        run: forge test -vvv
+      - name: Gas report
+        run: |
+          forge test --gas-report --no-match-contract "Invariant|ArcFork" > gas-report.txt
+          {
+            echo "## Gas report (unit, auth, blocklist, fuzz suites)"
+            echo '```'
+            cat gas-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  arc-fork:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      ARC_RPC_URL: https://rpc.mainnet.arc.io
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - name: Install forge-std (pinned)
+        run: forge install "foundry-rs/forge-std@${FORGE_STD_TAG}" --no-git
+      - name: Arc mainnet fork test
+        run: forge test --match-contract ArcFork -vvv
+
+  keeper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect keeper tests
+        id: detect
+        run: |
+          if [ -d keeper/tests ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "keeper/tests not present; nothing to run"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.detect.outputs.present == 'true'
+        with:
+          python-version: "3.11"
+      - name: Install keeper test deps
+        if: steps.detect.outputs.present == 'true'
+        run: pip install eth-account==0.13.7 eth-abi pycryptodome
+      - name: Keeper unit tests
+        if: steps.detect.outputs.present == 'true'
+        run: python -m unittest discover -s keeper/tests -v
