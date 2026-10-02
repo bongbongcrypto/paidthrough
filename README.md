@@ -4,7 +4,9 @@
 
 A worker in Seoul pays her son's tuition in Cebu. Today the money goes to a relative or through a bank transfer, and she finds out weeks later whether it reached the school. With PaidThrough the school issues a bill on Arc, she pays that bill from her phone with one signature, and her family can open a link and see it settle in about a second: *waiting for the school*, then *collected*. If the school never collects it by the deadline, the money goes back to her wallet automatically. Nobody in the middle can hold it, redirect it or take a cut.
 
-> **Live on Arc mainnet.** Contract [`0x05cf14cB82660942c272EaaD488C745490CB82aB`](https://explorer.arc.io/address/0x05cf14cB82660942c272EaaD488C745490CB82aB), deployed 2026-10-01 17:44 UTC in transaction [`0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a`](https://explorer.arc.io/tx/0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a) (block 23,746,519). The deployed runtime code was checked byte for byte against the CI build. Live page and the first real bills will be linked here. <!-- TODO(live): page URL and bill transactions -->
+> **Live on Arc mainnet.** Contract [`0x05cf14cB82660942c272EaaD488C745490CB82aB`](https://explorer.arc.io/address/0x05cf14cB82660942c272EaaD488C745490CB82aB), deployed 2026-10-01 17:44 UTC in transaction [`0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a`](https://explorer.arc.io/tx/0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a) (block 23,746,519). The deployed runtime code was checked byte for byte against the CI build. Source verified on Sourcify with an exact match of both creation and runtime code ([lookup](https://sourcify.dev/#/lookup/0x05cf14cB82660942c272EaaD488C745490CB82aB)).
+>
+> **Live page:** https://bongbongcrypto.github.io/paidthrough/ (reads the chain from your browser; no wallet needed to view a bill). The first real bills will be linked here. <!-- TODO(live): bill transactions -->
 
 ## The problem
 
