@@ -366,10 +366,10 @@ def record_markdown(rec: dict) -> str:
         for name, *_ in STEPS:
             if ((rec.get("steps") or {}).get(name) or {}).get("accepted"):
                 out += ["", "%s: %s" % (name, rec["steps"][name]["accepted"])]
-        if bills.get("B", {}).get("claimBy"):
+        ref = (rec.get("refund") or {})
+        if bills.get("B", {}).get("claimBy") and not ref.get("hash"):
             out += ["", "Bill B claimBy %s; the server keeper (every 5 min) refunds it after that." % when(
                 bills["B"]["claimBy"])]
-        ref = (rec.get("refund") or {})
         if ref.get("hash"):
             out += ["", "Bill B refund: [%s](%s) in block %s by %s." % (ref["hash"][:12], tx_link(ref["hash"]),
                                                                          ref.get("block"), ref.get("caller"))]

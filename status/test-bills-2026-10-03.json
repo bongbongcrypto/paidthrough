@@ -1,0 +1,226 @@
+{
+  "version": 1,
+  "network": "mainnet",
+  "chainId": 5042,
+  "contract": "0x05cf14cB82660942c272EaaD488C745490CB82aB",
+  "usdc": "0x3600000000000000000000000000000000000000",
+  "addresses": {
+    "deployer": "0x708B05A24D300c83f3D365DAD79a4c0b52D9038D",
+    "biller": "0x7421346433d41fb6fA52317a8f0EEb5275bc2051",
+    "payer": "0x6fAc56a942714aEa400f521D4c870dFB12D9d83b"
+  },
+  "fund": {
+    "txs": [
+      {
+        "role": "payer",
+        "to": "0x6fAc56a942714aEa400f521D4c870dFB12D9d83b",
+        "valueWei": 1100000000000000000,
+        "from": "0x708B05A24D300c83f3D365DAD79a4c0b52D9038D",
+        "maxCostWei": 1008000000000000,
+        "hash": "0xbd75d395bf952fdbe110d4a838a1b027f9ccb743e0e1e2d3643fb62f927f098c",
+        "nonce": 1,
+        "state": "confirmed",
+        "block": 24115954,
+        "gasUsed": 21000,
+        "effectiveGasPrice": 20000010000,
+        "costWei": 420000210000000,
+        "costUSDC": "0.00042001",
+        "explorer": "https://explorer.arc.io/tx/0xbd75d395bf952fdbe110d4a838a1b027f9ccb743e0e1e2d3643fb62f927f098c"
+      },
+      {
+        "role": "biller",
+        "to": "0x7421346433d41fb6fA52317a8f0EEb5275bc2051",
+        "valueWei": 50000000000000000,
+        "from": "0x708B05A24D300c83f3D365DAD79a4c0b52D9038D",
+        "maxCostWei": 1008000000000000,
+        "hash": "0xdc228f14557ee6db3fd1f37b2366b10d6c77972d36c01c9402bbdbb800aca26e",
+        "nonce": 2,
+        "state": "confirmed",
+        "block": 24115959,
+        "gasUsed": 21000,
+        "effectiveGasPrice": 20000010000,
+        "costWei": 420000210000000,
+        "costUSDC": "0.00042001",
+        "explorer": "https://explorer.arc.io/tx/0xdc228f14557ee6db3fd1f37b2366b10d6c77972d36c01c9402bbdbb800aca26e"
+      }
+    ]
+  },
+  "updated": "2026-10-03T23:01:51Z",
+  "startBlock": 24115966,
+  "bills": {
+    "A": {
+      "label": "collected",
+      "text": "Test bill A (mainnet check)",
+      "salt": "56bdb5623b266a7574f729c162c7c71b",
+      "ref": "0x54ab72d420b0b570e431e884fec59ea835a66c5cd3df6231382b8fc29e1475e2",
+      "amount": 500000,
+      "claimWindow": 604800,
+      "billId": 1,
+      "payBy": 1791323294,
+      "link": "https://bongbongcrypto.github.io/paidthrough/#/bill/1?r=Test+bill+A+%28mainnet+check%29&s=56bdb5623b266a7574f729c162c7c71b",
+      "claimBy": 1791668898,
+      "paidBlock": 24115981
+    },
+    "C": {
+      "label": "declined",
+      "text": "Test bill C (mainnet check)",
+      "salt": "1fa7b834f5db5f967ace6f4a143644fd",
+      "ref": "0x718fb26b2c7145b5c395d08e2e68630f7f1b2283bb9bf500e278395309d9e617",
+      "amount": 500000,
+      "claimWindow": 604800,
+      "billId": 2,
+      "payBy": 1791323302,
+      "link": "https://bongbongcrypto.github.io/paidthrough/#/bill/2?r=Test+bill+C+%28mainnet+check%29&s=1fa7b834f5db5f967ace6f4a143644fd",
+      "claimBy": 1791668909,
+      "paidBlock": 24116002
+    },
+    "B": {
+      "label": "refunded by the keeper",
+      "text": "Test bill B (mainnet check)",
+      "salt": "9780bf5cc0e9339cfa89a3e73d416b63",
+      "ref": "0x367297ef3c8f133022a7f622ee59bf2c27488d6a33460548f9ee9ae0c22c9c2f",
+      "amount": 500000,
+      "claimWindow": 3600,
+      "billId": 3,
+      "payBy": 1791323312,
+      "link": "https://bongbongcrypto.github.io/paidthrough/#/bill/3?r=Test+bill+B+%28mainnet+check%29&s=9780bf5cc0e9339cfa89a3e73d416b63",
+      "claimBy": 1791067717,
+      "paidBlock": 24116019
+    }
+  },
+  "steps": {
+    "A.issue": {
+      "state": "done",
+      "tx": {
+        "hash": "0xa5ded6e2020b3e98802d14282499e201c8c056cdd604e5e4eab13d5228a9f2ec",
+        "nonce": 0,
+        "from": "0x7421346433d41fb6fA52317a8f0EEb5275bc2051",
+        "block": 24115975,
+        "gasUsed": 138046,
+        "effectiveGasPrice": 20000010000,
+        "costWei": 2760921380460000,
+        "costUSDC": "0.00276093",
+        "explorer": "https://explorer.arc.io/tx/0xa5ded6e2020b3e98802d14282499e201c8c056cdd604e5e4eab13d5228a9f2ec"
+      }
+    },
+    "A.pay": {
+      "state": "done",
+      "tx": {
+        "hash": "0x30adafa74d41133372092983dde2d6056b02a403e31a54d2816ab598a888a617",
+        "nonce": 0,
+        "from": "0x6fAc56a942714aEa400f521D4c870dFB12D9d83b",
+        "block": 24115981,
+        "gasUsed": 106307,
+        "effectiveGasPrice": 20000010000,
+        "costWei": 2126141063070000,
+        "costUSDC": "0.00212615",
+        "explorer": "https://explorer.arc.io/tx/0x30adafa74d41133372092983dde2d6056b02a403e31a54d2816ab598a888a617"
+      }
+    },
+    "A.claim": {
+      "state": "done",
+      "tx": {
+        "hash": "0xe0bc1bb1561a41235cecfd914b06965665e8f4290d58d219762ed597552c197d",
+        "nonce": 1,
+        "from": "0x7421346433d41fb6fA52317a8f0EEb5275bc2051",
+        "block": 24115986,
+        "gasUsed": 58905,
+        "effectiveGasPrice": 20000010000,
+        "costWei": 1178100589050000,
+        "costUSDC": "0.00117811",
+        "explorer": "https://explorer.arc.io/tx/0xe0bc1bb1561a41235cecfd914b06965665e8f4290d58d219762ed597552c197d"
+      }
+    },
+    "C.issue": {
+      "state": "done",
+      "tx": {
+        "hash": "0xecbe57311f5d0d1dcb4e43d0082e8153477d935ad8c13e6b13f38f083462833d",
+        "nonce": 2,
+        "from": "0x7421346433d41fb6fA52317a8f0EEb5275bc2051",
+        "block": 24115991,
+        "gasUsed": 120934,
+        "effectiveGasPrice": 20000010000,
+        "costWei": 2418681209340000,
+        "costUSDC": "0.00241869",
+        "explorer": "https://explorer.arc.io/tx/0xecbe57311f5d0d1dcb4e43d0082e8153477d935ad8c13e6b13f38f083462833d"
+      }
+    },
+    "C.approve": {
+      "state": "done",
+      "tx": {
+        "hash": "0x1f725ead2c5e10561b58760e72ae942dd0a02e34aeea0c0938cae8493aebd0c2",
+        "nonce": 1,
+        "from": "0x6fAc56a942714aEa400f521D4c870dFB12D9d83b",
+        "block": 24115997,
+        "gasUsed": 55438,
+        "effectiveGasPrice": 20000010000,
+        "costWei": 1108760554380000,
+        "costUSDC": "0.00110877",
+        "explorer": "https://explorer.arc.io/tx/0x1f725ead2c5e10561b58760e72ae942dd0a02e34aeea0c0938cae8493aebd0c2"
+      }
+    },
+    "C.pay": {
+      "state": "done",
+      "tx": {
+        "hash": "0x0f35bb1bfbcb938d428763d661245a757e4c61f13d192cd7621e3fcf35d9db61",
+        "nonce": 2,
+        "from": "0x6fAc56a942714aEa400f521D4c870dFB12D9d83b",
+        "block": 24116002,
+        "gasUsed": 69406,
+        "effectiveGasPrice": 20000010000,
+        "costWei": 1388120694060000,
+        "costUSDC": "0.00138813",
+        "explorer": "https://explorer.arc.io/tx/0x0f35bb1bfbcb938d428763d661245a757e4c61f13d192cd7621e3fcf35d9db61"
+      }
+    },
+    "C.decline": {
+      "state": "done",
+      "tx": {
+        "hash": "0x60e648502fa6ed08a12de72456822851285daeed0329364349cf68972f7ccd5b",
+        "nonce": 3,
+        "from": "0x7421346433d41fb6fA52317a8f0EEb5275bc2051",
+        "block": 24116007,
+        "gasUsed": 65541,
+        "effectiveGasPrice": 20000010000,
+        "costWei": 1310820655410000,
+        "costUSDC": "0.00131083",
+        "explorer": "https://explorer.arc.io/tx/0x60e648502fa6ed08a12de72456822851285daeed0329364349cf68972f7ccd5b"
+      }
+    },
+    "B.issue": {
+      "state": "done",
+      "tx": {
+        "hash": "0x86aefd2a3b89b1d548428eb6508c6174bffda2a2e9ce3a7f59a6e28e969f3f4c",
+        "nonce": 4,
+        "from": "0x7421346433d41fb6fA52317a8f0EEb5275bc2051",
+        "block": 24116013,
+        "gasUsed": 120934,
+        "effectiveGasPrice": 20000010000,
+        "costWei": 2418681209340000,
+        "costUSDC": "0.00241869",
+        "explorer": "https://explorer.arc.io/tx/0x86aefd2a3b89b1d548428eb6508c6174bffda2a2e9ce3a7f59a6e28e969f3f4c"
+      }
+    },
+    "B.pay": {
+      "state": "done",
+      "tx": {
+        "hash": "0xf38d003b2c19a3ee7fdce13c1296f41ff138d20acd51462333d7fc13b1bbc847",
+        "nonce": 3,
+        "from": "0x6fAc56a942714aEa400f521D4c870dFB12D9d83b",
+        "block": 24116019,
+        "gasUsed": 106307,
+        "effectiveGasPrice": 20000010000,
+        "costWei": 2126141063070000,
+        "costUSDC": "0.00212615",
+        "explorer": "https://explorer.arc.io/tx/0xf38d003b2c19a3ee7fdce13c1296f41ff138d20acd51462333d7fc13b1bbc847"
+      }
+    }
+  },
+  "stoppedAt": null,
+  "refund": {
+    "hash": "0x8a2a540ac5c90a6e384dc55d7b15a4a39b98be7b2d416fcd7401b93123347932",
+    "block": 24123342,
+    "caller": "0x708B05A24D300c83f3D365DAD79a4c0b52D9038D",
+    "amount": 500000
+  }
+}

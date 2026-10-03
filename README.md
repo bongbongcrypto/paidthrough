@@ -6,7 +6,19 @@ A worker in Seoul pays her son's tuition in Cebu. Today the money goes to a rela
 
 > **Live on Arc mainnet.** Contract [`0x05cf14cB82660942c272EaaD488C745490CB82aB`](https://explorer.arc.io/address/0x05cf14cB82660942c272EaaD488C745490CB82aB), deployed 2026-10-01 17:44 UTC in transaction [`0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a`](https://explorer.arc.io/tx/0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a) (block 23,746,519). The deployed runtime code was checked byte for byte against the CI build. Source verified on Sourcify with an exact match of both creation and runtime code ([lookup](https://sourcify.dev/#/lookup/0x05cf14cB82660942c272EaaD488C745490CB82aB)).
 >
-> **Live page:** https://bongbongcrypto.github.io/paidthrough/ (reads the chain from your browser; no wallet needed to view a bill). The first real bills will be linked here. <!-- TODO(live): bill transactions -->
+> **Live page:** https://bongbongcrypto.github.io/paidthrough/ (reads the chain from your browser; no wallet needed to view a bill). Three test bills on mainnet are [below](#real-bills-on-mainnet).
+
+## Real bills on mainnet
+
+Three test bills of 0.50 USDC each ran on mainnet between two test wallets we control: biller `0x7421346433d41fb6fA52317a8f0EEb5275bc2051`, payer `0x6fAc56a942714aEa400f521D4c870dFB12D9d83b`. No outside biller or payer took part. [`scripts/test_bills.py`](scripts/test_bills.py) sent the issue, pay, collect and decline transactions and checked every receipt's USDC transfers and both wallets' balance changes to the wei. The refund of bill 3 was sent by the keeper on its own, from the server, with no one running anything. The references stored with the bills read "Test bill A", "Test bill C" and "Test bill B" for bills 1, 2 and 3. Each family link opens the public page, which reads the bill from the chain.
+
+| Bill | What happened | Family link | Transactions |
+|---|---|---|---|
+| 1 | Paid with one signature, then collected by the biller | [open](https://bongbongcrypto.github.io/paidthrough/#/bill/1?r=Test+bill+A+%28mainnet+check%29&s=56bdb5623b266a7574f729c162c7c71b) | [issue](https://explorer.arc.io/tx/0xa5ded6e2020b3e98802d14282499e201c8c056cdd604e5e4eab13d5228a9f2ec) · [pay](https://explorer.arc.io/tx/0x30adafa74d41133372092983dde2d6056b02a403e31a54d2816ab598a888a617) · [collect](https://explorer.arc.io/tx/0xe0bc1bb1561a41235cecfd914b06965665e8f4290d58d219762ed597552c197d) |
+| 2 | Paid with approve + pay (two transactions), then declined by the biller, so the money went back to the payer | [open](https://bongbongcrypto.github.io/paidthrough/#/bill/2?r=Test+bill+C+%28mainnet+check%29&s=1fa7b834f5db5f967ace6f4a143644fd) | [issue](https://explorer.arc.io/tx/0xecbe57311f5d0d1dcb4e43d0082e8153477d935ad8c13e6b13f38f083462833d) · [approve](https://explorer.arc.io/tx/0x1f725ead2c5e10561b58760e72ae942dd0a02e34aeea0c0938cae8493aebd0c2) · [pay](https://explorer.arc.io/tx/0x0f35bb1bfbcb938d428763d661245a757e4c61f13d192cd7621e3fcf35d9db61) · [decline](https://explorer.arc.io/tx/0x60e648502fa6ed08a12de72456822851285daeed0329364349cf68972f7ccd5b) |
+| 3 | Paid with one signature and left uncollected. Its collection window was 1 hour; the keeper refunded the payer 116 seconds after it closed | [open](https://bongbongcrypto.github.io/paidthrough/#/bill/3?r=Test+bill+B+%28mainnet+check%29&s=9780bf5cc0e9339cfa89a3e73d416b63) | [issue](https://explorer.arc.io/tx/0x86aefd2a3b89b1d548428eb6508c6174bffda2a2e9ce3a7f59a6e28e969f3f4c) · [pay](https://explorer.arc.io/tx/0xf38d003b2c19a3ee7fdce13c1296f41ff138d20acd51462333d7fc13b1bbc847) · [refund](https://explorer.arc.io/tx/0x8a2a540ac5c90a6e384dc55d7b15a4a39b98be7b2d416fcd7401b93123347932) |
+
+Gas used on mainnet, from the receipts: issue 120,934 – 138,046, pay with one signature 106,307, approve 55,438 + pay 69,406, collect 58,905, decline 65,541, refund 65,620. At the 20 gwei base fee each transaction cost between 0.0011 and 0.0028 USDC. The rehearsal's estimates are under [How we know it works](#how-we-know-it-works). The run record, with blocks and costs, is [`status/test-bills-2026-10-03.md`](status/test-bills-2026-10-03.md).
 
 ## The problem
 
@@ -52,13 +64,12 @@ One-signature payment uses USDC's EIP-3009, which Circle's USDC also has on othe
 
 - **Payer:** a Filipino worker in Korea who already sends money home for a known bill. Buys USDC on Upbit, withdraws it on Arc (fee 0.01 USDC as of 2026-09-16), pays from a phone.
 - **Biller:** a school, tutoring centre or clinic that will publish one Arc address. It needs no integration: it opens the biller desk, issues a bill, sends the link, and collects. To turn USDC into pesos it uses an exchange it can already access.
-- **First proof:** test bills between two of our own wallets on mainnet, end to end through the public page: one paid and collected, one left uncollected to show the automatic refund, and one declined. The transactions will be linked here. No outside biller has used PaidThrough yet.
-  <!-- TODO(deploy): if an outside biller takes part, name it for the bills it issued and drop "No outside biller has used PaidThrough yet." -->
+- **First proof:** three test bills between two of our own wallets, sent by a script and shown on the public page ([above](#real-bills-on-mainnet)). One was collected, one declined, and one refunded by the keeper after its window. No outside biller has used PaidThrough yet.
 - **Hardest part:** getting billers to hold an Arc address. That is the work the next steps are for.
 
 ## Next steps, and what the grant buys
 
-1. **Run it in public.** Mainnet deploy, the keeper on an always-on server, the page on a public URL. Keeper gas for a year at today's fee (0.0013 USDC per refund) is a few USDC.
+1. **Keep it running in public.** The contract, the keeper on an always-on server and the public page are live now. Keeper gas for a year at today's fee (0.0013 USDC per refund) is a few USDC; add uptime alerts for the keeper.
 2. **One pilot biller.** Onboard one biller in the Korea → Philippines corridor, publish the transactions, and write a one-page biller guide in English and Filipino.
 3. **Verified biller addresses.** Let a biller publish its address at a web address it controls (e.g. `/.well-known/paidthrough.json` on the school's domain); the bill page then shows "address published by <domain>". This closes the look-alike-bill risk described under Limits.
 4. **Native review** of the Filipino copy (currently a machine draft) and the biller guide.
@@ -82,7 +93,7 @@ Proposed use of 500 USDC: about 50 for gas and test bills, about 150 for paid na
 
 The negative steps include a signature for one bill replayed on another, the same signature sent straight to USDC or redirected, collecting one second late, refunding one second early, and payouts to an address that is really blocklisted on Arc mainnet. Each was refused with the exact expected error.
 
-**Tests in CI on every push** ([`ci.yml`](.github/workflows/ci.yml)): 138 contract tests: 65 unit, 32 signature, 26 blocklist, 13 in the fuzz suite (11 fuzz tests at 1,000 runs each + 2 decimal unit tests), and an invariant suite (4 invariants over 256 runs × 64 calls with every revert treated as a failure, plus a handler-liveness test). Forge counts the invariant suite as 2 tests, which is how the total reaches 138. Two more tests run in a separate job on a fork of Arc mainnet, against the real USDC contract code. The keeper has 81 tests, and the scripts job runs 50 tests (18 for the deploy script, the rest for the rehearsal matcher and the fact checker).
+**Tests in CI on every push** ([`ci.yml`](.github/workflows/ci.yml)): 138 contract tests: 65 unit, 32 signature, 26 blocklist, 13 in the fuzz suite (11 fuzz tests at 1,000 runs each + 2 decimal unit tests), and an invariant suite (4 invariants over 256 runs × 64 calls with every revert treated as a failure, plus a handler-liveness test). Forge counts the invariant suite as 2 tests, which is how the total reaches 138. Two more tests run in a separate job on a fork of Arc mainnet, against the real USDC contract code. The keeper has 81 tests, and the scripts job runs 88 tests (18 for the deploy script, 38 for the test-bill runner, the rest for the rehearsal matcher and the fact checker).
 
 **Reviewed.** Two internal adversarial reviews (security; spec and test quality) found no way to lose or redirect funds in the contract. They found three issues outside it (a keeper denial-of-service through log spam, dust bills that could delay real refunds, and a biller display that a look-alike address could fake) and eight test gaps. All are fixed; the list is in [`docs/DESIGN.md`](docs/DESIGN.md#review-findings-and-fixes).
 
@@ -95,6 +106,7 @@ The negative steps include a signature for one bill replayed on another, the sam
 | `web/` | Static page: bill status for family, pay, biller desk; English, Filipino (draft translation), Korean |
 | `scripts/probe_usdc.py` | Read-only check of the Arc USDC interface this relies on |
 | `scripts/rehearse_mainnet.py` | The real-node rehearsal above |
+| `scripts/test_bills.py` | Sends and checks the mainnet test bills above (dry run by default); its record is `status/test-bills-2026-10-03.md` |
 
 ## Run it
 
