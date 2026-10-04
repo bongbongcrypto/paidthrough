@@ -43,7 +43,7 @@ There is no other way for money to leave the contract. Nobody, including whoever
 - **Claim, not push.** The biller must collect. If the address was wrong, lost, or abandoned, the money comes back instead of sitting at a dead address.
 - **Strict boundary at `claimBy`.** Claim and decline end exactly when refund starts. There is no window in which both are possible and no gap in which neither is.
 - **Anyone can trigger a refund.** The keeper is a convenience, not a dependency: the family, the biller or a stranger can call `refund` once it is due, and it can only pay the original payer.
-- **One signature to pay.** Arc's USDC implements EIP-3009. `payWithAuthorization` uses `receiveWithAuthorization`, which only this contract can execute, with a nonce derived from `(chainId, contract, billId)`. A signature for one bill cannot pay any other bill, and no approval is left behind.
+- **Sign, then pay.** Arc's USDC implements EIP-3009. The payer signs typed data for the bill, and one `payWithAuthorization` transaction moves the money (the page sends it from the payer's wallet, so the browser shows two prompts and no approval transaction). `payWithAuthorization` uses `receiveWithAuthorization`, which only this contract can execute, with a nonce derived from `(chainId, contract, billId)`. A signature for one bill cannot pay any other bill, and no approval is left behind.
 - **References are fingerprints.** Every amount and address on Arc is public. The contract stores `sha256("paidthrough:v1:" + salt + ":" + text)`; the plaintext and salt travel only in the link's `#fragment`.
 - **Per-bill cap.** `maxAmount` (10,000 USDC on mainnet) bounds the loss from an unknown bug in unaudited code. It also catches the classic Arc mistake of passing an 18-decimal native amount where 6-decimal USDC units are expected (1 USDC × 10¹² is far above the cap).
 - **No libraries in `src/`.** The contract is small enough to read in one sitting; checks-effects-interactions plus a balance-delta check on the way in.
@@ -66,7 +66,7 @@ Two internal adversarial reviews ran on 2026-10-01, one on security and one on s
 Security review:
 
 - **Keeper log-spam DoS (medium).** More than 2,000 cheap `BillCancelled` events in one block made the keeper's log query fail on that block every run, which would stop automatic refunds. The keeper no longer reads `BillCancelled` and falls back to `getBill` when a block still overflows (`keeper/tests/test_spam.py`).
-- **Dust griefing (low).** Thousands of 1-unit bills could queue ahead of real refunds and burn keeper gas. Refunds now go largest first, and bills below 0.05 USDC are left for the payer to refund.
+- **Dust griefing (low).** Thousands of 1-unit bills could queue ahead of real refunds and burn keeper gas. Refunds now go largest first, and bills below 0.05 USDC are left for the payer, or anyone else, to refund from the bill page.
 - **Look-alike biller display (low).** The page showed the biller as a short address (32 bits) next to a green reference check, so a vanity address with the same short form could pass for the school. The page now shows the full checksummed address in 4-character groups, and the check says it does not prove who the biller is.
 
 Spec and test review:

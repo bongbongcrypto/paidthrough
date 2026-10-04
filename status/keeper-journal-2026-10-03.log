@@ -1,0 +1,22 @@
+2026-10-03T22:45:28+0000 systemd[1]: Starting PaidThrough refund keeper (one run)...
+2026-10-03T22:45:29+0000 python[1150349]: mainnet  contract 0x05cf14cB82660942c272EaaD488C745490CB82aB  block 24122742  time 2026-10-03 22:45:29Z
+2026-10-03T22:45:29+0000 python[1150349]: mode: SEND  sender 0x708B05A24D300c83f3D365DAD79a4c0b52D9038D  due bills: 0 (0 below the 0.050000 USDC keeper minimum)
+2026-10-03T22:45:29+0000 systemd[1]: paidthrough-keeper.service: Deactivated successfully.
+2026-10-03T22:45:29+0000 systemd[1]: Finished PaidThrough refund keeper (one run).
+2026-10-03T22:50:32+0000 systemd[1]: Starting PaidThrough refund keeper (one run)...
+2026-10-03T22:50:32+0000 python[1150417]: mainnet  contract 0x05cf14cB82660942c272EaaD488C745490CB82aB  block 24123339  time 2026-10-03 22:50:31Z
+2026-10-03T22:50:32+0000 python[1150417]: mode: SEND  sender 0x708B05A24D300c83f3D365DAD79a4c0b52D9038D  due bills: 1 (0 below the 0.050000 USDC keeper minimum)
+2026-10-03T22:50:32+0000 python[1150417]:   bill 3  refund 0.500000 USDC -> payer 0x6fAc56a942714aEa400f521D4c870dFB12D9d83b
+2026-10-03T22:50:32+0000 python[1150417]:           tx: from 0x708B05A24D300c83f3D365DAD79a4c0b52D9038D to 0x05cf14cB82660942c272EaaD488C745490CB82aB data 0x278ecde10000000000000000000000000000000000000000000000000000000000000003 value 0 chainId 5042 type 2
+2026-10-03T22:50:32+0000 python[1150417]:           gas estimate 66463, limit 79756; maxFee 40 gwei, priority 0.000013225 gwei
+2026-10-03T22:50:32+0000 python[1150417]:           fee ~0.001330 USDC (at most 0.003191 USDC)
+2026-10-03T22:50:33+0000 python[1150417]:   bill 3  sent 0x8a2a540ac5c90a6e384dc55d7b15a4a39b98be7b2d416fcd7401b93123347932 (nonce 3)
+2026-10-03T22:50:34+0000 python[1150417]:   bill 3  REFUNDED in block 24123342, gas 65620, fee 0.001313 USDC (1312400867824500 wei)
+2026-10-03T22:50:35+0000 python[1150417]: telegram: sent
+2026-10-03T22:50:35+0000 systemd[1]: paidthrough-keeper.service: Deactivated successfully.
+2026-10-03T22:50:35+0000 systemd[1]: Finished PaidThrough refund keeper (one run).
+2026-10-03T22:55:34+0000 systemd[1]: Starting PaidThrough refund keeper (one run)...
+2026-10-03T22:55:35+0000 python[1150493]: mainnet  contract 0x05cf14cB82660942c272EaaD488C745490CB82aB  block 24123936  time 2026-10-03 22:55:34Z
+2026-10-03T22:55:35+0000 python[1150493]: mode: SEND  sender 0x708B05A24D300c83f3D365DAD79a4c0b52D9038D  due bills: 0 (0 below the 0.050000 USDC keeper minimum)
+2026-10-03T22:55:35+0000 systemd[1]: paidthrough-keeper.service: Deactivated successfully.
+2026-10-03T22:55:35+0000 systemd[1]: Finished PaidThrough refund keeper (one run).

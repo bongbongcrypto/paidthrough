@@ -12,6 +12,9 @@ const DAY = 86400;
 const STATUS = { None: 0, Open: 1, Paid: 2, Claimed: 3, Refunded: 4, Declined: 5, Cancelled: 6 };
 const WINDOWS = [3600, DAY, 3 * DAY, 7 * DAY, 14 * DAY, 30 * DAY];
 const REF_MAX = 140;
+// Smallest bill the issue form accepts. The refund keeper skips bills under 0.05 USDC
+// (keeper/paidthrough_keeper.py DEFAULT_MIN_AMOUNT); the contract itself takes any amount above 0.
+const MIN_AMOUNT_UNITS = 50_000n;
 
 /* ------------------------------------------------------------------ i18n */
 
@@ -826,6 +829,33 @@ function goForm(kind) {
   err);
 }
 
+// t() with elements in place of {name} placeholders: 'on the {desk}' -> ['on the ', <a>, ''].
+function tEls(key, els) {
+  return t(key).split(/\{(\w+)\}/).map((part, i) => (i % 2 ? els[part] ?? '' : part));
+}
+
+// Real bills on this network (config `showcase`): test bills between two of our own wallets. Their states are
+// final, so the text never goes stale and nothing is read here; each link opens the bill's status page,
+// which reads Arc and checks the reference. Hidden in preview and on networks without a list.
+const SHOWCASE_PHASE = { 1: 'collected', 2: 'declined', 3: 'returned' };
+
+function realBills() {
+  const list = (net.showcase || []).filter((b) => SHOWCASE_PHASE[b.id] && STRINGS.en['real.b' + b.id]);
+  if (PREVIEW || !list.length) return null;
+  return h('section', { class: 'real', 'aria-labelledby': 'real-h' },
+    h('h2', { id: 'real-h', class: 'real-title' }, t('real.title')),
+    h('p', { class: 'real-intro' }, t('real.intro')),
+    h('ul', { class: 'real-list' }, list.map((b) => {
+      const s = STAMP[SHOWCASE_PHASE[b.id]];
+      const href = shareLink('bill', b.id, { text: b.ref, salt: b.salt }).replace(/^[^#]*/, '');
+      return h('li', null, h('a', { class: 'real-row', href },
+        h('span', { class: 'real-no' }, t('bill.no', { id: String(b.id) })),
+        h('span', { class: 'chip ' + s.look.split(' ').map((x) => 'stamp--' + x).join(' ') }, t(s.word)),
+        h('span', { class: 'real-what' }, t('real.b' + b.id))));
+    })),
+    h('p', { class: 'real-try' }, tEls('real.try', { desk: h('a', { href: '#/desk' }, t('real.tryDesk')) })));
+}
+
 async function viewHome(main) {
   const entries = h('section', { class: 'entries', 'aria-labelledby': 'start-h' },
     h('h2', { id: 'start-h', class: 'eyebrow' }, t('home.start')),
@@ -844,7 +874,8 @@ async function viewHome(main) {
       h('p', { class: 'eyebrow' }, t('home.eyebrow')),
       h('h1', { class: 'h-display' }, t('home.title')),
       h('p', { class: 'lede' }, t('home.lede')),
-      h('p', { class: 'home-limits' }, t('home.limits'))),
+      h('p', { class: 'home-limits' }, t('home.limits')),
+      realBills()),
     h('figure', { class: 'desk-panel home-bill' },
       exampleCard('paid'),
       h('figcaption', { class: 'caption' }, t('home.caption'))),
@@ -1368,7 +1399,7 @@ async function viewDesk(main, r, alive) {
     function validate() {
       let ok = true;
       const units = parseUnits(amountIn.value);
-      if (units == null || units <= 0n || units > CONFIG.maxAmountUnits) { amount.setErr(t('f.amount')); ok = false; } else amount.setErr('');
+      if (units == null || units < MIN_AMOUNT_UNITS || units > CONFIG.maxAmountUnits) { amount.setErr(t('f.amount')); ok = false; } else amount.setErr('');
       const text = refIn.value.trim().normalize('NFC');
       if (!text || text.length > REF_MAX) { ref.setErr(t('f.ref', { max: String(REF_MAX) })); ok = false; } else ref.setErr('');
       const pb = payByFromDate(payByIn.value);

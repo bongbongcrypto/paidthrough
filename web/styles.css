@@ -347,6 +347,22 @@ html:lang(ko) .stamp-sub { font-size: 11px; }
 .entries { grid-area: entries; }
 .home-limits { margin: 16px 0 0; font-size: 14px; color: var(--muted); max-width: 38em; }
 
+/* real bills on mainnet: each row is one link to that bill's status page */
+.real { margin: 24px 0 0; padding-top: 14px; border-top: 1px solid var(--hair); max-width: 38em; }
+.real-title { margin: 0 0 4px; font-size: 17px; font-weight: 600; letter-spacing: -0.02em; }
+.real-intro { margin: 0 0 6px; font-size: 14px; line-height: 1.45; color: var(--muted); }
+.real-list { margin: 0; padding: 0; list-style: none; }
+.real-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 16px; align-items: center;
+  min-height: 44px; padding: 8px 0; border-bottom: 1px solid var(--hair-soft);
+  color: var(--ink); text-decoration: none;
+}
+.real-no { font-size: 15px; font-weight: 600; color: var(--blue); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; font-variant-numeric: tabular-nums; }
+.real-row:hover .real-no { text-decoration-thickness: 2px; }
+.real-what { grid-column: 1 / -1; font-size: 14px; line-height: 1.45; color: var(--muted); }
+.real-try { margin: 12px 0 0; font-size: 14px; line-height: 1.45; }
+.real-intro, .real-what, .real-try { text-wrap: balance; }
+
 .entries > .eyebrow { margin: 0; padding: 14px 0 6px; border-top: 1px solid var(--hair); }
 .entry {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 24px; align-items: center;

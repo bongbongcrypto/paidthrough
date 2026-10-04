@@ -17,6 +17,13 @@ export const CONFIG = {
       usdc: '0x3600000000000000000000000000000000000000',
       paidThrough: '0x05cf14cB82660942c272EaaD488C745490CB82aB', // set after deploy
       deployBlock: 23746519, // block of the deploy tx; the biller's list scans logs from here
+      // Test bills on this contract between two of our own wallets (status/test-bills-2026-10-03.md). The landing
+      // links each one's status page. Reference text and salt exactly as issued, so the links verify on Arc.
+      showcase: [
+        { id: 1, ref: 'Test bill A (mainnet check)', salt: '56bdb5623b266a7574f729c162c7c71b' },
+        { id: 2, ref: 'Test bill C (mainnet check)', salt: '1fa7b834f5db5f967ace6f4a143644fd' },
+        { id: 3, ref: 'Test bill B (mainnet check)', salt: '9780bf5cc0e9339cfa89a3e73d416b63' },
+      ],
     },
     testnet: {
       label: 'Arc testnet',

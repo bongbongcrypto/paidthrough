@@ -53,3 +53,6 @@ Thumbs.db
 # Project artifacts
 .last-sync
 data/raw/
+
+# Evidence: keeper server log of a real refund (hostname stripped)
+!status/keeper-journal-*.log
