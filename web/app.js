@@ -234,15 +234,33 @@ class AppError extends Error {
 }
 
 let rpcSeq = 0;
+// Primary RPC first. When a request cannot be sent at all (an ad blocker, DNS, the host down), the host answers
+// 5xx or 429, or the reply is not JSON, the same request goes to the backup RPC, which then stays first for this
+// page load. Other HTTP errors are thrown as before.
+let rpcFirst = 0;
 async function rpcFetch(body) {
-  let res;
-  try {
-    res = await fetch(net.rpc, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  } catch {
-    throw new AppError('NETWORK');
+  const urls = [net.rpc, net.rpcBackup].filter(Boolean);
+  let last = new AppError('NETWORK');
+  for (let k = 0; k < urls.length; k++) {
+    const i = (rpcFirst + k) % urls.length;
+    let res;
+    try {
+      res = await fetch(urls[i], { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    } catch {
+      last = new AppError('NETWORK');
+      continue;
+    }
+    if (!res.ok) {
+      last = new AppError('NETWORK', 'HTTP ' + res.status);
+      if (res.status >= 500 || res.status === 429) continue;
+      throw last;
+    }
+    let j;
+    try { j = await res.json(); } catch { last = new AppError('NETWORK', 'bad JSON'); continue; }
+    rpcFirst = i;
+    return j;
   }
-  if (!res.ok) throw new AppError('NETWORK', 'HTTP ' + res.status);
-  try { return await res.json(); } catch { throw new AppError('NETWORK', 'bad JSON'); }
+  throw last;
 }
 
 async function rpc(method, params = []) {
@@ -410,7 +428,7 @@ async function ensureChain() {
         chainId: want,
         chainName: net.label,
         nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
-        rpcUrls: [net.rpc],
+        rpcUrls: [net.rpc, net.rpcBackup].filter(Boolean),
         blockExplorerUrls: [net.explorer],
       }],
     });

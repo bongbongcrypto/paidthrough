@@ -12,6 +12,9 @@ export const CONFIG = {
       label: 'Arc mainnet',
       chainId: 5042,
       rpc: 'https://rpc.mainnet.arc.io',
+      // Used only when the primary cannot be reached (an ad blocker list blocks arc.io, DNS, outage) or answers
+      // 5xx/429. Checked 2026-10-08: eth_chainId 0x13b2 (5042), CORS open.
+      rpcBackup: 'https://arc-mainnet.drpc.org',
       // Blockscout explorer listed on docs.arc.io "Connect to Arc" (checked 2026-10-01; /tx/<hash> returns 200).
       explorer: 'https://explorer.arc.io',
       usdc: '0x3600000000000000000000000000000000000000',
