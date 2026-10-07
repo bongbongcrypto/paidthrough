@@ -2,11 +2,21 @@
 
 **Pay a school or clinic bill abroad in USDC on Arc. The biller collects it, or it comes back to you.**
 
+Arc Microgrants entry ([DoraHacks BUIDL 49349](https://dorahacks.io/build/49349)) · Source: [github.com/bongbongcrypto/paidthrough](https://github.com/bongbongcrypto/paidthrough) · [75-second demo of the live page](https://youtu.be/0vCmrKP0SBk)
+
 A worker in Seoul pays her son's tuition in Cebu. Today the money goes to a relative or through a bank transfer, and she finds out weeks later whether it reached the school. With PaidThrough the school issues a bill on Arc, and she pays it from her phone by signing for that bill and confirming one transaction, with no separate approval step. Her family follows the bill from a link: *waiting for the school*, then *collected*. Arc finalizes the payment in under a second, and an open family page re-reads the chain every 10 seconds. If the school never collects by the deadline, the money goes back to her wallet. A keeper sends that refund automatically for bills of 0.05 USDC or more, and anyone can refund a smaller bill from its page. PaidThrough has no owner or admin who could hold the money, redirect it or take a cut, though the USDC issuer can still freeze a payout through its blocklist (see [Limits](#limits)).
 
-> **Live on Arc mainnet.** Contract [`0x05cf14cB82660942c272EaaD488C745490CB82aB`](https://explorer.arc.io/address/0x05cf14cB82660942c272EaaD488C745490CB82aB), deployed 2026-10-01 17:44 UTC in transaction [`0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a`](https://explorer.arc.io/tx/0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a) (block 23,746,519). The deployed runtime code was checked byte for byte against the CI build. Source verified on Sourcify with an exact match of both creation and runtime code ([lookup](https://sourcify.dev/#/lookup/0x05cf14cB82660942c272EaaD488C745490CB82aB)).
+> **Live on Arc mainnet.** Contract [`0x05cf14cB82660942c272EaaD488C745490CB82aB`](https://explorer.arc.io/address/0x05cf14cB82660942c272EaaD488C745490CB82aB), deployed 2026-10-01 17:44 UTC in transaction [`0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a`](https://explorer.arc.io/tx/0xb4e8a046729ae3851ca0d32c81dc2f4a432f4a946cd81ce788dfc7d971f01e2a) (block 23,746,519). The deployed runtime code was checked byte for byte against the CI build. Source verified on Sourcify with an exact match of both creation and runtime code ([Sourcify](https://repo.sourcify.dev/5042/0x05cf14cB82660942c272EaaD488C745490CB82aB)).
 >
 > **Live page:** https://bongbongcrypto.github.io/paidthrough/ (reads the chain from your browser; no wallet needed to view a bill). Its first screen shows an example bill, labelled as one. The three real bills on mainnet open from the family links [below](#real-bills-on-mainnet). All three are already settled (collected, declined, refunded), so none is open for a visitor to pay.
+
+## For reviewers (about 3 minutes)
+
+1. Open the [live page](https://bongbongcrypto.github.io/paidthrough/). It reads Arc mainnet from your browser; no wallet is needed to view a bill. If it keeps saying "Could not reach Arc", an ad blocker is probably blocking `rpc.mainnet.arc.io` (EasyPrivacy lists `arc.io`); allow it for this page.
+2. Open the three [real bills](#real-bills-on-mainnet): one collected, one declined, and one refunded by the keeper 116 seconds after its window closed.
+3. Check the deployed code: [Sourcify exact match](https://repo.sourcify.dev/5042/0x05cf14cB82660942c272EaaD488C745490CB82aB) of creation and runtime code, and the latest [CI run](https://github.com/bongbongcrypto/paidthrough/actions) (contract tests, Arc mainnet fork, keeper, scripts and the 37-step mainnet rehearsal).
+4. Watch the [75-second demo](https://youtu.be/0vCmrKP0SBk) of the live page.
+5. If our server stops, nothing is stuck: `refund` is open to anyone once a bill's window closes, and the bill page shows the button. The keeper only saves the payer that step.
 
 ## Real bills on mainnet
 
@@ -70,8 +80,8 @@ Paying by signature uses USDC's EIP-3009, which Circle's USDC also has on other 
 ## Next steps, and what the grant buys
 
 1. **Keep it running in public.** The contract, the keeper on an always-on server and the public page are live now. Keeper gas is about 0.0013 USDC per refund at today's fee; the yearly cost depends on how many bills go uncollected. Add uptime alerts for the keeper.
-2. **One pilot biller.** Onboard one biller in the Korea → Philippines corridor, publish the transactions, and write a one-page biller guide in English and Filipino.
-3. **Verified biller addresses.** Let a biller publish its address at a web address it controls (e.g. `/.well-known/paidthrough.json` on the school's domain); the bill page then shows "address published by <domain>". This closes the look-alike-bill risk described under Limits.
+2. **One pilot biller.** Target: a tutoring centre or language school in the Korea → Philippines corridor that already takes fees from parents working abroad. Pilot conditions: it publishes one Arc address on its own site, issues at least three real bills, and agrees to have the transactions published. We cover its gas and write a one-page biller guide in English and Filipino.
+3. **Verified biller addresses.** Let a biller publish its address at a web address it controls (e.g. `/.well-known/paidthrough.json` on the school's domain); the bill page then shows "address published by school.example". This closes the look-alike-bill risk described under Limits.
 4. **Native review** of the Filipino copy (currently a machine draft) and the biller guide.
 5. **Later:** installments and multi-payer bills, which need contract changes and a new deployment.
 
@@ -121,10 +131,19 @@ python keeper/paidthrough_keeper.py scan --network mainnet
 python -m http.server 8761 --directory web
 ```
 
-Contracts build and test in GitHub Actions (`.github/workflows/ci.yml`).
+Contracts (Foundry, the same commands CI runs):
+
+```
+cd contracts
+forge install foundry-rs/forge-std@v1.9.7 --no-git
+forge build --sizes
+forge test -vvv
+```
+
+CI runs all of the above on every push (`.github/workflows/ci.yml`).
 
 ## Limits
 
-Unaudited. A blocklisted payee can neither collect nor decline (the payer is refunded after the deadline); a blocklisted payer's refund waits until the block is lifted. A payer whose address has code (an EIP-7702 delegation or a smart account) can sign only if that wallet implements ERC-1271; otherwise the page switches to approve + pay. Tokens sent to the contract outside `pay` are stuck. The contract proves the biller's address collected the money, not that the school credited the student, and the page cannot yet prove an address belongs to a school (next step 3). Anyone can trigger a due refund from the bill page, which covers a keeper outage and the bills under 0.05 USDC that the keeper skips. No partial payments or installments yet.
+Unaudited. A blocklisted payee can neither collect nor decline (the payer is refunded after the deadline); a blocklisted payer's refund waits until the block is lifted. A payer whose address has code (an EIP-7702 delegation or a smart account) can sign only if that wallet implements ERC-1271; otherwise the page switches to approve + pay. Tokens sent to the contract outside `pay` are stuck. The contract proves the biller's address collected the money, not that the school credited the student, and the page cannot yet prove an address belongs to a school (next step 3). Anyone can trigger a due refund from the bill page, which covers a keeper outage and the bills under 0.05 USDC that the keeper skips. No partial payments or installments yet. The page talks to one RPC, `rpc.mainnet.arc.io`; ad blockers that apply EasyPrivacy (uBlock Origin's default) block `arc.io` as a third party, so the page cannot read the chain until that host is allowed.
 
 Independent project. Not affiliated with Circle or Arc.
